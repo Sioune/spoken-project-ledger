@@ -1,0 +1,10 @@
+{
+  "base_version": 1,
+  "changes": [{"type":"update","id":"t-teaser-feedback","values":{"next_action":"等待松叶反馈；收到回复后记录反馈内容及下一步","source_ref":"用户语音回合01a13e14-5d9f-7540-aa83-479bcd5a7d9e：teaser已更新并发出，正在等待反馈。实际发送时刻未知；本次为补记来源及跟进事项。"}}],
+  "confirmed": true,
+  "idempotency_key": "teaser-feedback-source-20261015-v1",
+  "operation_id": "op-teaser-feedback-source-20261015-v1",
+  "occurred_at": "2026-10-15T06:34:50Z",
+  "raw_text": "用户此前口述：teaser已更新并发出，正在等待反馈，请保持关注跟踪。此操作补记来源及下一步，occurred_at是补记时刻，不是发送时刻。",
+  "source_event_id": "voice-01a13e14-5d9f-7540-aa83-479bcd5a7d9e"
+}

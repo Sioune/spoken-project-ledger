@@ -21,7 +21,11 @@
 | POST `/api/undo` | `{operation_id,base_version,idempotency_key}` →新反向事件；有后续修改则409 |
 | GET `/api/export` | JSON备份；恢复通过confirmed restore操作完成 |
 
-MCP入口：`POST /mcp`，协议 `2026-07-28`，工具 `ledger_read`、`ledger_initialize`、`ledger_preview`、`ledger_commit`、`ledger_receipt`、`ledger_undo`。
+MCP入口：`POST /mcp`，协议 `2026-07-28`，工具 `ledger_read`、`ledger_initialize`、`ledger_preview`、`ledger_commit`、`ledger_commit_json`、`ledger_receipt`、`ledger_undo`。
+
+v1.0.1：父dot已实际完成线上读取和初始化至revision1，原生插件已连通。首次结构化commit未抵达Worker；现以显式字段schema替换自由对象，并支持update.source_ref。若嵌套参数仍不能被原生网关转交，调用 `ledger_commit_json({payload_json:JSON.stringify(完整原请求)})`，保持所有原编号、原版本和原时间；它走相同MCP契约校验、权限和持久提交。两个入口均只接受公开六种变更，不允许用JSON额外暴露恢复或其他字段。
+
+父原参数重试前，先确认原operation_id仍无回执且revision仍为1；若已有更新则按冲突规则处理。不得重新初始化、替换来源编号或把补记时刻当发送时刻。文件字段规范见 [DOCUMENT_FIELDS.md](DOCUMENT_FIELDS.md)。
 
 鉴权：Sites 私有访问边界和 ChatGPT 登录；应用从服务端 `oai-authenticated-user-id` 获取身份，数据库另绑定唯一所有者。客户端不能自报 owner_id。浏览器正常登录；父dot应安装/连接发布时Sites生成的个人插件，并用原生工具调用。**不能靠共享记忆、普通聊天文字或复制浏览器Cookie冒充集成。**未认证读取401；其他身份403；跨站浏览器写入403。文件只存Library索引，原文件访问继续由Library校验。
 

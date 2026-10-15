@@ -1,0 +1,30 @@
+{
+  "version": "1.0.1",
+  "production_observation": "Parent read/init/preview/receipt reached Worker; failed ledger_commit absent from request logs",
+  "gateway_schema_hypothesis": "Free-form nested values projection; now explicit typed fields and JSON fallback",
+  "fixed": [
+    "update.source_ref accepted",
+    "source-only edits preserve unknown completed_at",
+    "both MCP entries validate same public contract"
+  ],
+  "repository_regressions": {
+    "failed": 0,
+    "passed": 13
+  },
+  "mcp_transport": {
+    "checks": {
+      "structuredMcpCommit": true,
+      "jsonMcpReplaySameOperation3": true,
+      "independentReceiptAndRead": true,
+      "sourceRefPreserved": true,
+      "onlyTargetMetadataChanged": true,
+      "malformedJsonIsToolError": true,
+      "jsonCannotRestore": true,
+      "unauthenticatedCannotWrite": true
+    },
+    "operation_id": "op-teaser-feedback-source-20261015-v1-local",
+    "result_version": 11,
+    "production_write": false
+  },
+  "production_parent_retry": "pending after deployment; do not claim success"
+}
