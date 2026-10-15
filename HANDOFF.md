@@ -6,7 +6,7 @@
 
 ## 集成路径
 
-预定私有入口：`https://spoken-project-ledger.siounexzhao.chatgpt.site`。仅在部署回执确认成功后可用；当前进度以 `DEPLOYMENT.json` 为准。
+已上线的私有入口：`https://spoken-project-ledger.siounexzhao.chatgpt.site`。部署回执和线上验收证据已归档；线上写入由父dot实际验证通过。
 
 浏览器接口：
 
@@ -25,7 +25,9 @@ MCP入口：`POST /mcp`，协议 `2026-07-28`，工具 `ledger_read`、`ledger_i
 
 v1.0.1：父dot已实际完成线上读取和初始化至revision1，原生插件已连通。首次结构化commit未抵达Worker；现以显式字段schema替换自由对象，并支持update.source_ref。若嵌套参数仍不能被原生网关转交，调用 `ledger_commit_json({payload_json:JSON.stringify(完整原请求)})`，保持所有原编号、原版本和原时间；它走相同MCP契约校验、权限和持久提交。两个入口均只接受公开六种变更，不允许用JSON额外暴露恢复或其他字段。
 
-父原参数重试前，先确认原operation_id仍无回执且revision仍为1；若已有更新则按冲突规则处理。不得重新初始化、替换来源编号或把补记时刻当发送时刻。文件字段规范见 [DOCUMENT_FIELDS.md](DOCUMENT_FIELDS.md)。
+线上验收已通过：父端用原参数重试 `op-teaser-feedback-source-20261015-v1`，保存为revision2；当时回执为verified/current_fields_match，独立ledger_read一致。随后父端提交用户真实语音更新并独立读回revision3。开发任务又通过只读原生MCP独立核验当前revision3，原操作回执verified/result_version2/current_revision3（historical_commit_current_is_newer）。详见 [evidence/production-acceptance.json](evidence/production-acceptance.json)。此验收已完成，不应重放旧写入、重新初始化或再改生产任务。
+
+时间语义：当前 `completed_at` 是口述报告被记录的时间，不能据此推断更早的真实完成时刻。实际更早完成时间仍未知；阅读或呈现时应称“口述记录时间”。本轮仅补充交接说明和验收证据，没有发布界面修改或更改生产时间字段。文件字段规范见 [DOCUMENT_FIELDS.md](DOCUMENT_FIELDS.md)。
 
 鉴权：Sites 私有访问边界和 ChatGPT 登录；应用从服务端 `oai-authenticated-user-id` 获取身份，数据库另绑定唯一所有者。客户端不能自报 owner_id。浏览器正常登录；父dot应安装/连接发布时Sites生成的个人插件，并用原生工具调用。**不能靠共享记忆、普通聊天文字或复制浏览器Cookie冒充集成。**未认证读取401；其他身份403；跨站浏览器写入403。文件只存Library索引，原文件访问继续由Library校验。
 
@@ -51,7 +53,7 @@ v1.0.1：父dot已实际完成线上读取和初始化至revision1，原生插�
 4. 调用 `ledger_receipt` 查询原编号，再独立 `ledger_read` 比较实际revision和关键字段。只有state=verified才能说应用已保存；若当前已有更新版，分别报告本次版本与当前版本。
 5. 同一请求原样重放3次必须返回原回执且duplicate=true。同key异payload409。超时先查原编号，不重建任务。
 
-当前实现支持人工粘贴文本模拟转写和结构化MCP写入。真实语音→父dot→本库链路尚需父dot自身实测；浏览器未申请麦克风权限。安装/连接本应用个人插件若未自动完成，需要用户在原生界面操作。无新服务账号或持久密钥。
+当前实现支持人工粘贴文本模拟转写和结构化MCP写入。父dot已实际取得用户语音中的任务变化、提交并独立读回；该原生入口现已验证。浏览器直接录音未启用、未申请麦克风权限；外部推送未启用。无新服务账号或持久密钥。
 
 ## 行为边界
 

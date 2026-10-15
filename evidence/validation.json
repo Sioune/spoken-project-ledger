@@ -58,7 +58,7 @@
   },
   "typescript": "passed",
   "build": "passed",
-  "parent_dot_integration": "not_yet_verified",
-  "real_voice_integration": "not_yet_verified",
+  "parent_dot_integration": "passed native MCP write, receipt, independent read: revisions2 and3",
+  "real_voice_integration": "passed through parent dot; direct browser recording is not enabled",
   "external_push": "not_enabled"
 }

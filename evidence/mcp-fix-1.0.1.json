@@ -26,5 +26,5 @@
     "result_version": 11,
     "production_write": false
   },
-  "production_parent_retry": "pending after deployment; do not claim success"
+  "production_parent_retry": "passed: original structured ledger_commit -> revision2, verified receipt and independent read; later genuine user voice update -> revision3"
 }

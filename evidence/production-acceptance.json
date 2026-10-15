@@ -1,0 +1,75 @@
+{
+  "recorded_at": "2026-10-15T06:53:38.855Z",
+  "source": "Read-only native MCP checks in developer task after parent acceptance",
+  "production_mutations_by_this_closure": false,
+  "original_commit": {
+    "operation_id": "op-teaser-feedback-source-20261015-v1",
+    "state": "verified",
+    "result_version": 2,
+    "current_revision": 3,
+    "verification": "historical_commit_current_is_newer",
+    "created_at": "2026-10-15T06:48:10.090Z",
+    "occurred_at": "2026-10-15T06:34:50Z"
+  },
+  "current_revision": 3,
+  "parent_acceptance": {
+    "revision2": "Parent retried original ledger_commit; receipt verified/current_fields_match and independent ledger_read agreed.",
+    "revision3": "Parent submitted user's new voice update and independently read it back."
+  },
+  "current_tasks": [
+    {
+      "id": "t-package",
+      "status": "doing",
+      "completed_at": null,
+      "updated_at": "2026-10-15T06:50:12.031Z"
+    },
+    {
+      "id": "t-rights",
+      "status": "waiting",
+      "completed_at": null,
+      "updated_at": "2026-10-15T06:34:24.282Z"
+    },
+    {
+      "id": "t-screenshots",
+      "status": "done",
+      "completed_at": "2026-10-15T06:49:39Z",
+      "updated_at": "2026-10-15T06:50:12.031Z"
+    },
+    {
+      "id": "t-submit",
+      "status": "blocked",
+      "completed_at": null,
+      "updated_at": "2026-10-15T06:34:24.282Z"
+    },
+    {
+      "id": "t-online",
+      "status": "blocked",
+      "completed_at": null,
+      "updated_at": "2026-10-15T06:34:24.282Z"
+    },
+    {
+      "id": "t-teaser-edit",
+      "status": "done",
+      "completed_at": null,
+      "updated_at": "2026-10-15T06:34:24.282Z"
+    },
+    {
+      "id": "t-teaser-send",
+      "status": "done",
+      "completed_at": null,
+      "updated_at": "2026-10-15T06:34:24.282Z"
+    },
+    {
+      "id": "t-teaser-feedback",
+      "status": "waiting",
+      "completed_at": null,
+      "updated_at": "2026-10-15T06:48:10.090Z"
+    }
+  ],
+  "time_semantics": "completed_at currently records the time the user report was recorded, not a verified earlier real-world completion time. Earlier actual completion time remains unknown.",
+  "remaining_boundaries": [
+    "Direct browser audio recording is not enabled",
+    "External push is not enabled"
+  ],
+  "acceptance": "Parent dot native write -> persisted operation -> receipt -> independent read has passed."
+}
