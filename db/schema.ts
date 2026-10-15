@@ -1,0 +1,3 @@
+import {sqliteTable,text,integer,uniqueIndex} from 'drizzle-orm/sqlite-core';
+export const ledgers=sqliteTable('ledgers',{id:integer('id').primaryKey(),ownerId:text('owner_id').notNull(),revision:integer('revision').notNull(),data:text('data').notNull(),lastOperation:text('last_operation').notNull()});
+export const operations=sqliteTable('operations',{id:text('id').primaryKey(),ownerId:text('owner_id').notNull(),idempotencyKey:text('idempotency_key').notNull(),sourceEventId:text('source_event_id').notNull(),payloadHash:text('payload_hash').notNull(),receipt:text('receipt').notNull(),createdAt:text('created_at').notNull()},t=>[uniqueIndex('owner_key').on(t.ownerId,t.idempotencyKey),uniqueIndex('owner_source').on(t.ownerId,t.sourceEventId)]);

@@ -1,0 +1,64 @@
+{
+  "recorded_at": "2026-10-15T06:25:54.3257826Z",
+  "sqlite_regressions": {
+    "passed": 11,
+    "failed": 0
+  },
+  "d1": {
+    "runtime": "Miniflare / workerd real D1",
+    "run": "9f1c6eb6-5b57-4b01-acc6-9a5efd16d8bc",
+    "checks": {
+      "concurrentCAS": true,
+      "atomicRollback": true,
+      "foreignIdentity403": true,
+      "reopenPersistence": true,
+      "receiptVerified": true
+    },
+    "operation_id": "643dfea8-572c-4868-8ecd-0fc03aa4d51d",
+    "result_version": 2
+  },
+  "http": {
+    "base": "http://127.0.0.1:5186",
+    "checks": {
+      "unauthenticated401": true,
+      "forgedIdentity401": true,
+      "createReadReceipt": true,
+      "replay3NoDuplicate": true,
+      "keyMismatch409": true,
+      "undo": true,
+      "staleConflict409": true,
+      "failedWriteNoSuccess": true,
+      "crossOrigin403": true,
+      "mcpReadAndError": true
+    },
+    "operation_id": "96d8d7bf-1230-47b2-9fcf-98e763cdcd2c",
+    "result_version": 2
+  },
+  "browser": {
+    "checks": {
+      "unauthenticatedUI": true,
+      "createSaveReadback": true,
+      "reloadPersistence": true,
+      "duplicateNoInsert": true,
+      "conflictVisible": true,
+      "saveFailureNotSuccess": true,
+      "draftRetained": true,
+      "mobile390NoOverflow": true,
+      "desktop1440NoOverflow": true,
+      "mobileNavigation": true,
+      "noPageErrors": true
+    },
+    "operation_id": "op_c0f776f8-2a19-440a-b249-4b485dd6eebc",
+    "result_version": 5,
+    "screenshots": [
+      "desktop.png",
+      "mobile.png",
+      "mobile-settings.png"
+    ]
+  },
+  "typescript": "passed",
+  "build": "passed",
+  "parent_dot_integration": "not_yet_verified",
+  "real_voice_integration": "not_yet_verified",
+  "external_push": "not_enabled"
+}
