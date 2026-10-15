@@ -6,8 +6,9 @@ async function rpc(name,args,cookieValue=cookie){const r=await fetch(base+'/mcp'
 const original=JSON.parse(fs.readFileSync('tests/mcp-parent-payload.json','utf8'));
 const state=(await rpc('ledger_read',{})).structuredContent;
 // The exact base_version=1 payload is covered by repository regression. This local
-// transport test uses the local test ledger's current revision; production is untouched.
-const request={...original,base_version:state.revision,operation_id:original.operation_id+'-local',idempotency_key:original.idempotency_key+'-local',source_event_id:original.source_event_id+'-local'};
+// transport test uses a fresh local event and the current local revision; production is untouched.
+const runSuffix='-local-'+crypto.randomUUID();
+const request={...original,base_version:state.revision,occurred_at:new Date().toISOString(),operation_id:original.operation_id+runSuffix,idempotency_key:original.idempotency_key+runSuffix,source_event_id:original.source_event_id+runSuffix};
 const commit=await rpc('ledger_commit',request);assert.equal(commit.isError,false,JSON.stringify(commit));assert.equal(commit.structuredContent.state,'verified');
 for(let i=0;i<3;i++){const replay=await rpc('ledger_commit_json',{payload_json:JSON.stringify(request)});assert.equal(replay.isError,false);assert.equal(replay.structuredContent.duplicate,true);assert.equal(replay.structuredContent.operation_id,request.operation_id)}
 const read=(await rpc('ledger_read',{})).structuredContent,receipt=(await rpc('ledger_receipt',{operation_id:request.operation_id})).structuredContent;assert.equal(read.revision,request.base_version+1);assert.equal(receipt.state,'verified');const t=read.data.tasks.find(t=>t.id==='t-teaser-feedback');assert.equal(t.next_action,original.changes[0].values.next_action);assert.equal(t.source_ref,original.changes[0].values.source_ref);assert.equal(t.status,'waiting');

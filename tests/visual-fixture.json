@@ -1,0 +1,23 @@
+{
+  "initialized":true,"revision":5,"identity":{"displayName":"演示空间"},
+  "data":{
+    "projects":[
+      {"id":"demo-product","name":"产品体验升级","goal":"让每天查看和推进任务都更轻松","status":"active","external_links":[],"version":1},
+      {"id":"demo-content","name":"内容与创意","goal":"完成本期内容规划与发布准备","status":"active","external_links":[],"version":1},
+      {"id":"demo-collab","name":"项目协作","goal":"把交付、反馈和下一步记录清楚","status":"active","external_links":[],"version":1},
+      {"id":"demo-files","name":"资料与归档","goal":"保存正式采用的方案和历史版本","status":"active","external_links":[],"version":1}
+    ],
+    "tasks":[
+      {"id":"demo-t1","project_id":"demo-product","title":"完善演示版本的首页交互","status":"doing","next_action":"核对任务卡片与保存反馈，完成后交付评审。","dependencies":[],"verification_state":"user_reported","version":1,"updated_at":"2026-10-15T07:00:00Z","source_ref":"隔离视觉验收数据"},
+      {"id":"demo-t2","project_id":"demo-product","title":"整理下一轮体验测试问题","status":"todo","next_action":"汇总查看任务时遇到的问题，形成一份简短清单。","dependencies":[],"verification_state":"user_reported","version":1,"updated_at":"2026-10-15T07:00:00Z","source_ref":"隔离视觉验收数据"},
+      {"id":"demo-t3","project_id":"demo-files","title":"校对项目方案与版本清单","status":"todo","next_action":"检查方案中的任务与文件版本是否一一对应。","dependencies":[],"verification_state":"user_reported","version":1,"updated_at":"2026-10-15T07:00:00Z","source_ref":"隔离视觉验收数据"},
+      {"id":"demo-t4","project_id":"demo-content","title":"发布新一期产品笔记","status":"blocked","next_action":"等待内容提纲审核通过后再安排发布。","dependencies":["demo-t7"],"verification_state":"user_reported","version":1,"updated_at":"2026-10-15T07:00:00Z","source_ref":"隔离视觉验收数据"},
+      {"id":"demo-t5","project_id":"demo-collab","title":"等待演示方案的评审意见","status":"waiting","next_action":"收到回复后，记录反馈内容及下一步。","waiting_for":"协作方","expected_result":"评审结论与调整方向","dependencies":[],"verification_state":"user_reported","version":1,"updated_at":"2026-10-15T07:00:00Z","source_ref":"隔离视觉验收数据"},
+      {"id":"demo-t6","project_id":"demo-files","title":"完成资料归档与版本说明","status":"done","next_action":"已归档，后续修改保留新版本。","dependencies":[],"verification_state":"user_reported","version":1,"updated_at":"2026-10-15T07:00:00Z","completed_at":null,"source_ref":"隔离视觉验收数据"},
+      {"id":"demo-t7","project_id":"demo-content","title":"核实内容工作台当前版本","status":"todo","next_action":"向现有执行入口核实最新状态。","dependencies":[],"verification_state":"unverified","version":1,"updated_at":"2026-10-15T07:00:00Z","source_ref":"隔离视觉验收数据"}
+    ],
+    "documents":[{"id":"demo-doc","project_id":"demo-files","task_id":"demo-t6","filename":"项目方案与版本说明.docx","versions":[{"id":"demo-v1","library_ref":"libfile_visualdemoversion1","summary":"整理关键流程、交付结果与后续注意事项。","created_at":"2026-10-15T07:00:00Z"}],"current_version":"demo-v1","accepted_version":"demo-v1"}],
+    "pending":[{"id":"demo-q1","question":"本期内容的最终采用版本是哪一份？","status":"open","context":"核对后再标记正式采用版本。"}],
+    "settings":{"timezone":"Asia/Shanghai","intervalHours":2,"workStart":"09:00","workEnd":"19:00","enabled":false},"reminderLog":[]
+  }
+}

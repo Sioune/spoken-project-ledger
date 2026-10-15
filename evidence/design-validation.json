@@ -1,0 +1,191 @@
+{
+  "recorded_at": "2026-10-15T07:48:24.886Z",
+  "scope": "Frontend readability redesign; backend, MCP, migrations, ownership and reminder behavior unchanged.",
+  "typescript": "passed",
+  "production_build": "passed",
+  "repository_tests": {
+    "passed": 13,
+    "failed": 0
+  },
+  "d1": {
+    "runtime": "Miniflare / workerd real D1",
+    "run": "b729350e-7f0d-4eef-b5d5-3cd131296f15",
+    "checks": {
+      "concurrentCAS": true,
+      "atomicRollback": true,
+      "foreignIdentity403": true,
+      "reopenPersistence": true,
+      "receiptVerified": true
+    }
+  },
+  "http": {
+    "base": "http://127.0.0.1:5186",
+    "checks": {
+      "unauthenticated401": true,
+      "forgedIdentity401": true,
+      "createReadReceipt": true,
+      "replay3NoDuplicate": true,
+      "keyMismatch409": true,
+      "undo": true,
+      "staleConflict409": true,
+      "failedWriteNoSuccess": true,
+      "crossOrigin403": true,
+      "mcpReadAndError": true
+    },
+    "operation_id": "badcf580-9249-42fe-a291-998612b96f8a",
+    "result_version": 12
+  },
+  "mcp": {
+    "checks": {
+      "structuredMcpCommit": true,
+      "jsonMcpReplaySameOperation3": true,
+      "independentReceiptAndRead": true,
+      "sourceRefPreserved": true,
+      "onlyTargetMetadataChanged": true,
+      "malformedJsonIsToolError": true,
+      "jsonCannotRestore": true,
+      "unauthenticatedCannotWrite": true
+    },
+    "operation_id": "op-teaser-feedback-source-20261015-v1-local-f82212aa-d509-4297-ba8e-c1d44b8ff836",
+    "result_version": 14,
+    "production_write": false
+  },
+  "browser": {
+    "checks": {
+      "unauthenticatedUI": true,
+      "createSaveReadback": true,
+      "reloadPersistence": true,
+      "duplicateNoInsert": true,
+      "conflictVisible": true,
+      "saveFailureNotSuccess": true,
+      "draftRetained": true,
+      "mobile390NoOverflow": true,
+      "desktop1440NoOverflow": true,
+      "mobileNavigation": true,
+      "noPageErrors": true
+    },
+    "operation_id": "op_4144957c-c620-4c40-9c14-dcec1176043c",
+    "result_version": 15,
+    "screenshots": [
+      "desktop.png",
+      "mobile.png",
+      "mobile-settings.png"
+    ]
+  },
+  "detail_and_files": {
+    "checks": {
+      "newTaskAllFields": true,
+      "editBlankDatesNull": true,
+      "libraryReferenceUI": true,
+      "exportIncludesAudit": true
+    },
+    "operation_id": "op_e95cd026-eb37-4527-aa57-20b4363d2357"
+  },
+  "readability": {
+    "ok": true,
+    "viewports": [
+      1440,
+      390,
+      320
+    ],
+    "screenshots": 34,
+    "measurements": 34,
+    "failures": 0,
+    "pageErrors": 0,
+    "writeRequests": 0,
+    "minimumFontPx": {
+      "body": 17,
+      ".task-title": 20,
+      ".next-action": 16,
+      ".status-badge": 14
+    },
+    "minimumCriticalContrast": 5.178534754633228,
+    "minimumHeadingContrast": 12.13660274776373,
+    "minimumPrimaryHeight": 48,
+    "minimumIconWidth": 44,
+    "minimumIconHeight": 44,
+    "horizontalOverflow": 0,
+    "dialogReachability": [
+      {
+        "viewport": 1440,
+        "dialog": "task-detail",
+        "dependenciesReachable": true,
+        "filesReachable": true,
+        "scrollTop": 0,
+        "clientHeight": 892,
+        "scrollHeight": 892,
+        "atBottom": true
+      },
+      {
+        "viewport": 1440,
+        "dialog": "task-editor",
+        "dependencyEditorReachable": true,
+        "saveButtonVisible": true,
+        "scrollTop": 0,
+        "clientHeight": 978,
+        "scrollHeight": 978,
+        "atBottom": true
+      },
+      {
+        "viewport": 390,
+        "dialog": "task-detail",
+        "dependenciesReachable": true,
+        "filesReachable": true,
+        "scrollTop": 319,
+        "clientHeight": 818,
+        "scrollHeight": 1137,
+        "atBottom": true
+      },
+      {
+        "viewport": 390,
+        "dialog": "task-editor",
+        "dependencyEditorReachable": true,
+        "saveButtonVisible": true,
+        "scrollTop": 494,
+        "clientHeight": 818,
+        "scrollHeight": 1312,
+        "atBottom": true
+      },
+      {
+        "viewport": 320,
+        "dialog": "task-detail",
+        "dependenciesReachable": true,
+        "filesReachable": true,
+        "scrollTop": 459,
+        "clientHeight": 714,
+        "scrollHeight": 1173,
+        "atBottom": true
+      },
+      {
+        "viewport": 320,
+        "dialog": "task-editor",
+        "dependencyEditorReachable": true,
+        "saveButtonVisible": true,
+        "scrollTop": 643,
+        "clientHeight": 714,
+        "scrollHeight": 1357,
+        "atBottom": true
+      }
+    ],
+    "source": "Actual frontend; entirely fictional API fixture. All non-GET/HEAD requests and cross-origin requests blocked before dispatch. No production data read or written."
+  },
+  "production_baseline": {
+    "revision": 5,
+    "projects": 7,
+    "tasks": 17,
+    "documents": 2,
+    "canonical_revision_and_data_sha256": "d2b2e74be5a44371f9e0d8f7786ab19b1f69f5da7509fce9c88b3234769ca53f"
+  },
+  "independent_visual_review": {
+    "result": "passed",
+    "p0": 0,
+    "small_screen_subtitle_and_timezone": "fixed",
+    "dialog_bottom": "verified without saving"
+  },
+  "boundaries": {
+    "production_test_writes": 0,
+    "browser_microphone": "not_enabled",
+    "external_push": "not_enabled",
+    "owner_only": "preserved"
+  }
+}
