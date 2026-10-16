@@ -1,8 +1,10 @@
 import {AppError,applyChanges,seed,type Ledger,type Submit} from './model';
+import type {CalendarData,CalendarRegistration} from './calendar';
 export type Statement={bind:(...v:unknown[])=>Statement;first:<T=Record<string,unknown>>()=>Promise<T|null>;all:<T=Record<string,unknown>>()=>Promise<{results:T[]}>;run:()=>Promise<unknown>};
 export type Database={prepare:(sql:string)=>Statement;batch:(s:Statement[])=>Promise<unknown[]>};
 type Row={id:number;owner_id:string;revision:number;data:string;last_operation:string};
 type Op={id:string;owner_id:string;idempotency_key:string;source_event_id:string;payload_hash:string;receipt:string;created_at:string};
+type CalendarHistoryRow={id:string;created_at:string;result_version:number|null;undo_of:string|null;valid_shape:number;changes:string;before_tasks:string;after_tasks:string;before_projects:string;after_projects:string};
 export type Receipt={state:string;operation_id:string;result_version:number;created_at:string;occurred_at:string;timezone:string;changes:unknown[];before:Ledger;after:Ledger;source_event_id:string;raw_text:string;undo_of?:string;duplicate?:boolean;current_revision?:number;verification?:string};
 const canonical=(v:unknown):string=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canonical).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical((v as Record<string,unknown>)[k])).join(',')+'}';
 async function hash(v:unknown){const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonical(v)));return Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('')}
@@ -22,6 +24,51 @@ export class Repository{
  private async opById(id:string){return this.db.prepare('SELECT * FROM operations WHERE id=? AND owner_id=?').bind(id,this.owner).first<Op>()}
  async receipt(id:string){await this.state();const op=await this.opById(id);if(!op)throw new AppError(404,'OPERATION','操作编号不存在，不能确认保存成功');const receipt=JSON.parse(op.receipt) as Receipt;try {const row=await this.state();if(!row||row.revision<receipt.result_version)throw Error('readback');if(row.revision===receipt.result_version&&canonical(JSON.parse(row.data))!==canonical(receipt.after))throw Error('mismatch');return {...receipt,state:'verified',current_revision:row.revision,verification:row.revision===receipt.result_version?'current_fields_match':'historical_commit_current_is_newer'}}catch(e){if(e instanceof AppError&&e.status===403)throw e;return {...receipt,state:'pending_verification',verification:'readback_unavailable'}}}
  async history(){await this.state();const result=await this.db.prepare('SELECT * FROM operations WHERE owner_id=? ORDER BY created_at DESC LIMIT 100').bind(this.owner).all<Op>();return {operations:result.results.map(op=>JSON.parse(op.receipt))}}
+ async calendar():Promise<CalendarData>{
+  const row=await this.state(),data:Ledger=row?JSON.parse(row.data):{projects:[],tasks:[],documents:[],pending:[],settings:{timezone:'Asia/Shanghai',intervalHours:2,workStart:'09:00',workEnd:'19:00',enabled:false},reminderLog:[]};
+  const registrations=new Map<string,CalendarRegistration>(),missing=new Set<string>(),warnings:string[]=[];
+  const validInstant=(value:unknown):value is string=>typeof value==='string'&&/(Z|[+-]\d{2}:\d{2})$/.test(value)&&Number.isFinite(Date.parse(value));
+  for(const [kind,records] of [['task',data.tasks],['project',data.projects]] as const)for(const record of records){const key=`${kind}:${record.id}`;if(validInstant(record.created_at))registrations.set(key,{registered_at:record.created_at,registration_source:'recorded'});else missing.add(key);}
+  let history_complete=true,cursorVersion=0,cursorId='';
+  // Return only compact ID/operation summaries, never pages of complete private snapshots.
+  const ids=(collection:string)=>`CASE WHEN json_valid(receipt) THEN (SELECT json_group_array(json_extract(value,'$.id')) FROM json_each(operations.receipt,'$.${collection}')) END`;
+  const query=`SELECT * FROM (SELECT id,created_at,
+   CASE WHEN json_valid(receipt) THEN CAST(json_extract(receipt,'$.result_version') AS INTEGER) END AS result_version,
+   CASE WHEN json_valid(receipt) THEN json_extract(receipt,'$.undo_of') END AS undo_of,
+   CASE WHEN json_valid(receipt) THEN json_type(receipt,'$.before.tasks')='array' AND json_type(receipt,'$.after.tasks')='array' AND json_type(receipt,'$.before.projects')='array' AND json_type(receipt,'$.after.projects')='array' AND json_type(receipt,'$.changes')='array' ELSE 0 END AS valid_shape,
+   CASE WHEN json_valid(receipt) THEN (SELECT json_group_array(json_object('type',json_extract(value,'$.type'),'id',json_extract(value,'$.id'))) FROM json_each(operations.receipt,'$.changes')) END AS changes,
+   ${ids('before.tasks')} AS before_tasks,${ids('after.tasks')} AS after_tasks,${ids('before.projects')} AS before_projects,${ids('after.projects')} AS after_projects
+   FROM operations WHERE owner_id=?) WHERE (result_version IS NULL OR result_version<=?) AND (result_version IS NULL OR result_version>? OR (result_version=? AND id>?)) ORDER BY result_version ASC,id ASC LIMIT 20`;
+  try{
+   while(missing.size){
+    const page=await this.db.prepare(query).bind(this.owner,row!.revision,cursorVersion,cursorVersion,cursorId).all<CalendarHistoryRow>();
+    if(!page.results.length)break;
+    for(const entry of page.results){
+     if(!Number.isInteger(entry.result_version)||entry.result_version!<1||!entry.valid_shape)throw Error('Unusable history');
+     const changes=JSON.parse(entry.changes) as {type:string;id?:string}[];
+     const before={task:new Set<string>(JSON.parse(entry.before_tasks)),project:new Set<string>(JSON.parse(entry.before_projects))};
+     const after={task:new Set<string>(JSON.parse(entry.after_tasks)),project:new Set<string>(JSON.parse(entry.after_projects))};
+     for(const key of missing){
+      const separator=key.indexOf(':'),kind=key.slice(0,separator) as 'task'|'project',id=key.slice(separator+1);
+      if(!before[kind].has(id)&&!after[kind].has(id))continue;
+      const isBirth=!before[kind].has(id)&&after[kind].has(id)&&!entry.undo_of&&!changes.some(c=>c.type==='restore')&&changes.some(c=>c.type==='initialize'||(c.id===id&&c.type===(kind==='task'?'create':'project')));
+      registrations.set(key,isBirth&&validInstant(entry.created_at)?{registered_at:entry.created_at,registration_source:'history'}:{registered_at:null,registration_source:'unknown'});
+      missing.delete(key);
+     }
+     cursorVersion=entry.result_version!;cursorId=entry.id;
+     if(!missing.size)break;
+    }
+    if(page.results.length<20)break;
+   }
+  }catch{history_complete=false;warnings.push('历史登记时间读取未完成，无法核实的日期保持未知；可稍后重新读取。');}
+  for(const key of missing)registrations.set(key,{registered_at:null,registration_source:'unknown'});
+  const unknownCount=Array.from(registrations.values()).filter(r=>r.registration_source==='unknown').length;
+  if(unknownCount)warnings.push(`${unknownCount} 项任务或项目缺少可靠首次登记时间，已标为未知；编辑、口述和恢复时间均未代替登记。`);
+  const registration=(kind:'task'|'project',id:string)=>registrations.get(`${kind}:${id}`)??{registered_at:null,registration_source:'unknown' as const};
+  return {revision:row?.revision??0,timezone:'Asia/Shanghai',generated_at:new Date().toISOString(),history_complete,warnings,
+   tasks:data.tasks.map(t=>({...registration('task',t.id),id:t.id,project_id:t.project_id,title:t.title,status:t.status,next_action:t.next_action,dependencies:[...t.dependencies],planned_date:t.planned_date??null,due_at:t.due_at??null,completed_at:t.completed_at??null})),
+   projects:data.projects.map(p=>({...registration('project',p.id),id:p.id,name:p.name,status:p.status,start_date:p.start_date??null,target_end_date:p.target_end_date??null,completed_date:p.completed_date??null}))};
+ }
  async commit(input:Submit){
   if(!input||typeof input!=='object')throw new AppError(400,'INPUT','请求无效');
   for(const k of ['operation_id','idempotency_key','source_event_id','occurred_at','raw_text'] as const)if(typeof input[k]!=='string'||input[k].length>(k==='raw_text'?10000:250))throw new AppError(400,'INPUT','缺少或无效字段：'+k);

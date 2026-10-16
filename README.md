@@ -8,6 +8,7 @@
 
 - 今天要做、等待别人、待确认、已完成；项目、任务、子任务和依赖。
 - 前序任务可从详情或编辑页点击进入，查看完整内容并在自己的详情完成；全部前序完成后自动解锁后续，不自动完成后续。现有任务的依赖在普通编辑页只读，新建任务仍可选择依赖。
+- 日历包含“每日登记”和“项目周期”：前者按首次登记的上海日期归类，后者自动展示项目内每项任务的节点，关联原任务详情和前序流程。项目支持实际进场、计划完成与实际完成日期，三者可分别留空。
 - 初始六项真实工作；制作完成与反馈等待分开，未核实进度保持待核。
 - 幂等提交、事件日志、revision冲突、迟到事实保护、反向撤销。
 - 保存后读回验证；离线、超时、失败保留原文与编号；不假报保存成功。
@@ -36,6 +37,7 @@ node node_modules/typescript/bin/tsc --noEmit
 node --test tests/repository.test.mjs
 node --test tests/preview-rounds.test.mjs
 node --test tests/dependency-lock.test.mjs
+node --test tests/calendar.test.mjs
 node tests/d1-proof.mjs
 node tests/http-proof.mjs
 ```
@@ -50,6 +52,8 @@ node tests/mcp-submit-proof.mjs
 node tests/readability-proof.mjs
 node tests/settings-preview-proof.mjs
 node tests/dependency-flow-proof.mjs
+node tests/calendar-flow-proof.mjs
+node tests/calendar-ui-proof.mjs
 ```
 
 四项写入回归顺序为 HTTP → MCP → browser → browser-detail。默认本机端口 5186 被占用时，使用另一个端口启动项目簿并设置 `LEDGER_QA_BASE=http://127.0.0.1:该端口`；只接受本机 HTTP，并在写入前核对项目簿 MCP 服务身份。可读性测试同端口通过 `QA_BASE` 设置。
@@ -67,3 +71,9 @@ node tests/dependency-flow-proof.mjs
 附件本体仍在Library，应用只保存索引。定时备份、物理删除、关闭网页后的推送、自动催人、外发和版权提交均未启用。撤销若存在任何后续编辑会阻止自动覆盖，需先核对差异。
 
 私有Site身份、版本、部署回执见交付文件。没有新账号、付费服务或硬编码密钥。
+
+## 日历日期语义
+
+日历入口支持 `?view=calendar`，月份、选中日、模式和项目筛选会保存在地址参数。新项目和任务的首次登记时间由服务端生成，后续编辑不能修改；已有记录从本人操作回执按全库版本顺序分页推导，超过最近100条历史仍会继续查找。无法确认首次登记的记录单独列为未知，不以最近更新时间替代。读取日历不会回填、重写或迁移原有数据。
+
+项目周期自动包含每项任务。任务登记、计划日期、硬截止和口述完成记录使用不同标签；`completed_at`仍然只是口述完成被记录的时刻。实际进场、计划完成、实际完成由用户明确填写，完成日不自动归档或关闭任务。修改项目日期沿用版本冲突、幂等保存、回执及独立读回流程。所有日历测试只写本机隔离库或使用拦截API的虚构夹具。
