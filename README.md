@@ -7,6 +7,7 @@
 ## 已实现
 
 - 今天要做、等待别人、待确认、已完成；项目、任务、子任务和依赖。
+- 前序任务可从详情或编辑页点击进入，查看完整内容并在自己的详情完成；全部前序完成后自动解锁后续，不自动完成后续。现有任务的依赖在普通编辑页只读，新建任务仍可选择依赖。
 - 初始六项真实工作；制作完成与反馈等待分开，未核实进度保持待核。
 - 幂等提交、事件日志、revision冲突、迟到事实保护、反向撤销。
 - 保存后读回验证；离线、超时、失败保留原文与编号；不假报保存成功。
@@ -34,6 +35,7 @@ node scripts/run-framework.mjs dev --port 5186
 node node_modules/typescript/bin/tsc --noEmit
 node --test tests/repository.test.mjs
 node --test tests/preview-rounds.test.mjs
+node --test tests/dependency-lock.test.mjs
 node tests/d1-proof.mjs
 node tests/http-proof.mjs
 ```
@@ -47,6 +49,7 @@ node tests/browser-detail-proof.mjs
 node tests/mcp-submit-proof.mjs
 node tests/readability-proof.mjs
 node tests/settings-preview-proof.mjs
+node tests/dependency-flow-proof.mjs
 ```
 
 四项写入回归顺序为 HTTP → MCP → browser → browser-detail。默认本机端口 5186 被占用时，使用另一个端口启动项目簿并设置 `LEDGER_QA_BASE=http://127.0.0.1:该端口`；只接受本机 HTTP，并在写入前核对项目簿 MCP 服务身份。可读性测试同端口通过 `QA_BASE` 设置。

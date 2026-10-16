@@ -41,7 +41,7 @@ function validate(data:Ledger){
 }
 export function applyChanges(current:Ledger,changes:Change[],now:string,occurredAt:string):{data:Ledger;effective:Change[]}{
  if(!Array.isArray(changes)||changes.length>100)throw new AppError(400,'CHANGES','每组最多100项变更');
- const data=clone(current),effective:Change[]=[];
+ const data=clone(current),effective:Change[]=[],activeUpdates=new Set<string>();
  for(const c of changes){if(!c||typeof c.values!=='object'||!c.values||Array.isArray(c.values))throw new AppError(400,'CHANGE','变更格式不正确');const v=c.values;
   if(c.type==='create'){
    const title=str(v.title,300);if(!title)throw new AppError(400,'TITLE','请输入任务名称');
@@ -55,6 +55,7 @@ export function applyChanges(current:Ledger,changes:Change[],now:string,occurred
    const t=data.tasks.find(t=>t.id===c.id);if(!t)throw new AppError(404,'TASK','任务不存在');
    if(new Date(occurredAt).getTime()<new Date(t.updated_at).getTime()-1000)throw new AppError(409,'STALE_EVENT','这条输入早于当前事实，请读取最新状态再确认',{task:t});
    const allowed=['title','project_id','status','next_action','planned_date','due_at','waiting_for','expected_result','review_at','dependencies','verification_state','source_ref','parent_id']; const delta:Record<string,unknown>={};for(const [k,original]of Object.entries(v)){const val=original===''&&!['title','project_id','status','next_action','verification_state','source_ref'].includes(k)?null:original;if(!allowed.includes(k))throw new AppError(400,'FIELD','不允许修改字段：'+k);if(['title','project_id','status','next_action','verification_state','source_ref'].includes(k)&&(val===null||typeof val!=='string'||!val.trim()))throw new AppError(400,'FIELD','此字段不能为空：'+k);if(k==='dependencies'){if(!Array.isArray(val))throw new AppError(400,'DEPENDENCY','依赖必须为数组');delta[k]=val.map(x=>str(x,100))}else{delta[k]=val===null?null:str(val,k==='title'?300:2000);if(['due_at','review_at'].includes(k)&&val!==null&&(!String(val).match(/(Z|[+-]\d\d:\d\d)$/)||!Number.isFinite(Date.parse(String(val)))))throw new AppError(400,'DATE','时间需包含时区');if(k==='planned_date'&&val!==null&&!/^\d{4}-\d{2}-\d{2}$/.test(String(val)))throw new AppError(400,'DATE','计划日格式应为YYYY-MM-DD');}}
+   if(typeof delta.status==='string'&&['doing','waiting','done'].includes(delta.status))activeUpdates.add(t.id);
    if(Object.entries(delta).every(([k,val])=>JSON.stringify(t[k as keyof Task])===JSON.stringify(val)))continue;
    const oldStatus=t.status,oldCompletedAt=t.completed_at;Object.assign(t,delta,{version:t.version+1,updated_at:now});t.completed_at=t.status==='done'?(oldStatus==='done'?oldCompletedAt:occurredAt):null;effective.push(c);
   }else if(c.type==='project'){
@@ -76,6 +77,14 @@ export function applyChanges(current:Ledger,changes:Change[],now:string,occurred
    const restored=v.data as Ledger;if(!restored||!Array.isArray(restored.tasks)||!Array.isArray(restored.projects)||!Array.isArray(restored.documents)||!Array.isArray(restored.pending)||!restored.settings)throw new AppError(400,'RESTORE','备份格式无效');
    validate(restored);const copy=clone(restored);for(const t of copy.tasks){const prior=current.tasks.find(x=>x.id===t.id);const compare=(x:Task)=>JSON.stringify({...x,version:0,updated_at:''});if(prior&&compare(t)!==compare(prior)){t.version=Math.max(t.version,prior.version)+1;t.updated_at=now}else if(prior){t.version=prior.version;t.updated_at=prior.updated_at}}Object.assign(data,copy,{reminderLog:[]});effective.push(c);
   }else throw new AppError(400,'CHANGE','变更类型不支持');
+ }
+ // A status update cannot erase its original unfinished prerequisites in the same group.
+ // Check final outcomes so either ordering of a legitimate atomic completion remains valid.
+ for(const id of activeUpdates){
+  const before=current.tasks.find(t=>t.id===id),after=data.tasks.find(t=>t.id===id);
+  if(!before||!after||!['doing','waiting','done'].includes(after.status))continue;
+  const blockers=before.dependencies.filter(dep=>current.tasks.find(t=>t.id===dep)?.status!=='done'&&data.tasks.find(t=>t.id===dep)?.status!=='done');
+  if(blockers.length)throw new AppError(409,'BLOCKED','原前序任务尚未完成，不能通过修改依赖跳过',{task_id:id,blocking_dependency_ids:blockers});
  }
  // A released prerequisite makes the next action available; it never completes it.
  for(const t of data.tasks){if(t.status==='blocked'&&t.dependencies.length&&t.dependencies.every(id=>data.tasks.find(d=>d.id===id)?.status==='done')){t.status=t.waiting_for?'waiting':'todo';t.version++;t.updated_at=now;effective.push({type:'update',id:t.id,values:{status:t.status}})}else if(t.status==='todo'&&t.dependencies.some(id=>data.tasks.find(d=>d.id===id)?.status!=='done')){t.status='blocked';t.version++;t.updated_at=now;effective.push({type:'update',id:t.id,values:{status:'blocked'}})}}

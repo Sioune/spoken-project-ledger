@@ -201,7 +201,7 @@ try {
       check((await detail.locator('h2').innerText()) === firstTaskTitle, `${label}: task detail preserves task identity`);
       check(await detail.locator('.detail-next p').isVisible(), `${label}: task next action can be read`);
       await capture(page, `${label}-task-detail`);
-      const dependencyHeading = detail.getByRole('heading', { name: '依赖与子任务', exact: true });
+      const dependencyHeading = detail.getByRole('heading', { name: '前序任务', exact: true });
       await dependencyHeading.scrollIntoViewIfNeeded();
       const dependenciesReachable = await inViewport(dependencyHeading);
       check(dependenciesReachable, `${label}: dependency section is reachable within the dialog viewport`);
