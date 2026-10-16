@@ -4,11 +4,12 @@ import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import { Check, ChevronRight, CircleAlert, FileImage, ImagePlus, LoaderCircle, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { CLASSIFICATION_LABELS, EMPTY_INTAKE_FIELDS, type ExistingTaskRef, type IntakeCapabilities, type IntakeFields, type IntakePreview, type RecognitionResult } from "@/lib/intake-types";
 import type { Submit } from "@/lib/model";
+import CodexBridgePanel, { type CodexBridgeInput, type CodexBridgeResult } from "./codex-bridge-panel";
 import "./image-intake.css";
 
 export type ImageIntakeProps = { projects: { id: string; name: string }[]; tasks: ExistingTaskRef[]; revision: number; disabled: boolean; onSaved: (operationId: string) => Promise<boolean>; onOpenTask: (id: string) => void };
 type LocalImage = { blob: Blob; name: string; type: string; size: number; lastModified: number };
-type IntakeDraft = { version: 1; sourceEventId: string; recognitionRequestId: string; note: string; image: LocalImage | null; fields: IntakeFields; mode: "image" | "manual"; recognitionQuestions: string[]; recognitionQuestionHistory: string[]; resolvedRecognitionQuestions: string[]; recognized: { provider: string; model: string } | null; preview: IntakePreview | null; pending: Submit | null; conflict: boolean; imageError: string; savedAt: string };
+type IntakeDraft = { version: 1; sourceEventId: string; recognitionRequestId: string; recognitionModel: string | null; note: string; image: LocalImage | null; fields: IntakeFields; mode: "image" | "manual"; recognitionQuestions: string[]; recognitionQuestionHistory: string[]; resolvedRecognitionQuestions: string[]; recognized: { provider: string; model: string } | null; preview: IntakePreview | null; pending: Submit | null; conflict: boolean; imageError: string; savedAt: string };
 type Phase = "idle" | "running" | "error" | "done";
 const MAX_BYTES = 1_500_000;
 const IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
@@ -16,7 +17,7 @@ const STATUS = { todo: "待办", doing: "进行中", waiting: "等待反馈", bl
 const EVENTS = { reserved: "已预约", planned: "计划参加", completed: "已发生", cancelled: "已取消" };
 const FIELD_LABELS: Record<string, string> = { item_type: "记录类型", status: "任务状态", event_status: "活动状态", event_date: "活动日期", start_at: "开始时刻", location: "地点", planned_date: "计划日期", due_at: "截止时刻", fact_date: "事实发生日期", fact_at: "事实发生时刻", next_action: "下一步", project_id: "所属项目", attachment_ids: "关联原图", verification_state: "核实程度" };
 
-const newDraft = (): IntakeDraft => ({ version: 1, sourceEventId: `image-source-${crypto.randomUUID()}`, recognitionRequestId: `image-recognition-${crypto.randomUUID()}`, note: "", image: null, fields: { ...EMPTY_INTAKE_FIELDS }, mode: "image", recognitionQuestions: [], recognitionQuestionHistory: [], resolvedRecognitionQuestions: [], recognized: null, preview: null, pending: null, conflict: false, imageError: "", savedAt: new Date().toISOString() });
+const newDraft = (): IntakeDraft => ({ version: 1, sourceEventId: `image-source-${crypto.randomUUID()}`, recognitionRequestId: `image-recognition-${crypto.randomUUID()}`, recognitionModel: null, note: "", image: null, fields: { ...EMPTY_INTAKE_FIELDS }, mode: "image", recognitionQuestions: [], recognitionQuestionHistory: [], resolvedRecognitionQuestions: [], recognized: null, preview: null, pending: null, conflict: false, imageError: "", savedAt: new Date().toISOString() });
 
 function openDraftDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -130,7 +131,7 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
         else { setError(cause instanceof Error ? cause.message : "图片能力与本机草稿暂时不可读取"); setStorageState("error"); setStorageError("草稿恢复尚未完成，请重新连接后再填写。"); }
       } finally { if (!cancelled) setCapabilityLoading(false); }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; if (epoch === accessEpoch.current) accessEpoch.current++; };
   }, [capabilityAttempt]);
 
   useEffect(() => {
@@ -173,7 +174,7 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
     if (!IMAGE_TYPES.includes(file.type) || !allowed.includes(file.type)) { setDraft(current => ({ ...current, imageError: "仅支持 PNG、JPEG、WEBP 图片，原有图片和说明仍保留。" })); return; }
     if (!file.size || file.size > maximum) { setDraft(current => ({ ...current, imageError: `图片需为 1 至 ${maximum.toLocaleString("zh-CN")} 字节。请另选图片，原有说明仍保留。` })); return; }
     setConsent(false); setRecognition("idle");
-    editDraft({ image: { blob: file, name: file.name, type: file.type, size: file.size, lastModified: file.lastModified }, recognitionRequestId: `image-recognition-${crypto.randomUUID()}`, recognized: null, recognitionQuestions: [], recognitionQuestionHistory: [], resolvedRecognitionQuestions: [], imageError: "" });
+    editDraft({ image: { blob: file, name: file.name, type: file.type, size: file.size, lastModified: file.lastModified }, recognitionRequestId: `image-recognition-${crypto.randomUUID()}`, recognitionModel: null, recognized: null, recognitionQuestions: [], recognitionQuestionHistory: [], resolvedRecognitionQuestions: [], imageError: "" });
   }
 
   async function recognize() {
@@ -204,6 +205,41 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
       setDraft(current => ({ ...current, fields: result.fields, preview: result, savedAt: new Date().toISOString() }));
       setPreviewPhase("done"); setMessage(result.changes.length ? "核对预览已生成；确认后才会正式保存。" : "本次只预览，没有可直接保存的变更。");
     } catch (cause) { if (epoch === accessEpoch.current) { setPreviewPhase("error"); reportError(cause, "核对预览未完成，图片和字段仍保留"); } }
+  }
+
+  async function recognizeWithCodex(model: string, invoke: (input: CodexBridgeInput) => Promise<CodexBridgeResult>) {
+    if (locked || !draft.image) return;
+    if (draft.recognitionModel && draft.recognitionModel !== model) throw new Error("更换模型前需明确准备一次新的识别，原编号不变更模型");
+    const epoch = accessEpoch.current;
+    const started = { ...draft, recognitionModel: model, preview: null, savedAt: new Date().toISOString() };
+    let bridgeFailure: unknown;
+    setRecognition("running"); setError(""); setMessage("正在通过本人本机授权识别原图；尚未保存事项。");
+    try {
+      await persistNow(started); if (epoch !== accessEpoch.current) return; setDraft(started);
+      const localImage = draft.image;
+      const bytes = await localImage.blob.arrayBuffer();
+      const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(value => value.toString(16).padStart(2, "0")).join("");
+      if (epoch !== accessEpoch.current) return;
+      let bridge: CodexBridgeResult;
+      try { bridge = await invoke({ image: new File([localImage.blob], localImage.name, { type: localImage.type, lastModified: localImage.lastModified }), note: started.note, projects: projects.map(project => ({ id: project.id, name: project.name })), requestId: started.recognitionRequestId }); }
+      catch (cause) { bridgeFailure = cause; throw cause; }
+      if (epoch !== accessEpoch.current) return;
+      if (bridge?.provider !== "codex-local-plan" || bridge.completed !== true || bridge.request_id !== started.recognitionRequestId || bridge.model !== model || bridge.image_sha256 !== hash || !bridge.result) throw new Error("本机响应的识别结果、原图校验或原请求编号不一致；没有采用候选，也没有保存事项");
+      const form = withImage(new FormData(), localImage); form.set("result_json", JSON.stringify(bridge));
+      const result = await requestJSON<RecognitionResult>("/api/intake/codex-result", form);
+      if (epoch !== accessEpoch.current) return;
+      const candidate: IntakeDraft = { ...started, fields: { ...result.fields, action: "inspect", uncertainties_confirmed: false }, mode: "manual", recognized: { provider: result.provider, model: result.model }, recognitionQuestions: result.questions || [], recognitionQuestionHistory: result.questions || [], resolvedRecognitionQuestions: [], preview: null, savedAt: new Date().toISOString() };
+      setDraft(candidate); await persistNow(candidate); setRecognition("done"); setPreviewPhase("running");
+      const previewForm = withImage(new FormData(), localImage); previewForm.set("draft_json", JSON.stringify({ fields: candidate.fields, note: candidate.note, questions: candidate.recognitionQuestions, source_event_id: candidate.sourceEventId }));
+      const preview = await requestJSON<IntakePreview>("/api/intake/preview", previewForm);
+      if (epoch !== accessEpoch.current) return;
+      if (preview.changes.length || preview.fields.action !== "inspect") throw new Error("自动识别回来的预览必须仅供核对，未采用意外的保存变更");
+      setDraft(current => ({ ...current, fields: preview.fields, preview, savedAt: new Date().toISOString() })); setPreviewPhase("done");
+      setMessage("Codex识别候选已返回核对预览，尚未保存。请修订字段并明确选择操作；已有事项不会重复新增。");
+    } catch (cause) {
+      if (epoch === accessEpoch.current) { setRecognition("error"); setPreviewPhase("error"); reportError(cause, "本机识图或候选核对未完成，图片与原编号仍保留"); }
+      if (cause === bridgeFailure) throw cause;
+    } finally { setConsent(false); }
   }
 
   async function finishVerification(operationId: string) {
@@ -277,9 +313,10 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
     {ready && <>
       <div className="intake-source-tools"><input ref={fileInput} className="intake-file-input" type="file" accept="image/png,image/jpeg,image/webp" aria-label="选择事项图片" onChange={selectFile} disabled={locked} /><button type="button" className="intake-button" onClick={() => fileInput.current?.click()} disabled={locked}><FileImage size={18} aria-hidden="true" />{draft.image ? "更换图片" : "选择图片"}</button><button type="button" className="intake-button" aria-pressed={draft.mode === "manual"} disabled={locked} onClick={() => editDraft({ mode: "manual" })}>手动填写</button><span>PNG / JPEG / WEBP，最多 1,500,000 字节</span></div>
       {draft.imageError && <p className="intake-file-error" role="alert">{draft.imageError}</p>}
-      {draft.image && <div className="intake-image-card">{imageURL && <img src={imageURL} alt={`本机待核对图片：${draft.image.name}`} />}<div><strong>{draft.image.name}</strong><span>{draft.image.size.toLocaleString("zh-CN")} 字节 · 原图未压缩</span><p>已选图，仅存于本机草稿；不代表已经识别或正式保存。</p><button type="button" className="intake-link" disabled={locked} onClick={() => { setConsent(false); editDraft({ image: null, recognitionRequestId: `image-recognition-${crypto.randomUUID()}`, recognized: null, recognitionQuestions: [], imageError: "" }); }}>移除图片</button></div></div>}
-      <label className="intake-label">补充说明<textarea aria-label="图片补充说明" rows={3} value={draft.note} maxLength={2000} disabled={locked} onChange={event => { setConsent(false); editDraft({ note: event.target.value, recognitionRequestId: `image-recognition-${crypto.randomUUID()}` }); }} placeholder="写下这张图和已有事项的关系；未知时间、地点可以留空。" /></label>
-      <div className="intake-vision-box"><strong>图片识别</strong>{visionAvailable ? <><p>本次识别会将原图和补充说明发送给 {capabilities!.vision.provider}（{capabilities!.vision.model}），按 token 计费；每天最多 {capabilities!.vision.max_daily_requests} 次。</p><p>{capabilities!.vision.pricing_text}</p><p>{capabilities!.vision.retention_text}</p><label className="intake-check"><input type="checkbox" checked={consent} disabled={locked || !draft.image} onChange={event => setConsent(event.target.checked)} /><span>我同意本次发送原图与补充说明给 OpenAI，并按 token 计费。</span></label></> : <p>{capabilities?.vision.configured ? "图片识别尚未启用。可以手动填写并核对，不会调用视觉服务。" : "尚未配置图片识别。可以选图保留草稿并手动填写；当前没有识别图片内容。"}</p>}<button type="button" className="intake-button" disabled={locked || !visionAvailable || !consent || !draft.image} onClick={() => { void recognize(); }}>{recognition === "running" ? <LoaderCircle className="spin" size={17} /> : <ImagePlus size={17} />}识别预览{visionAvailable ? "（可能收费）" : ""}</button>{visionAvailable && draft.image && (draft.recognized || recognition === "error") && <button type="button" className="intake-link" disabled={locked} onClick={() => { setConsent(false); editDraft({ recognitionRequestId: `image-recognition-${crypto.randomUUID()}` }); setMessage("已准备一次新的识别。再次勾选费用同意后才发送，可能再次计费；原图片与字段仍保留。"); }}>准备重新识别（可能再次收费）</button>}</div>
+      {draft.image && <div className="intake-image-card">{imageURL && <img src={imageURL} alt={`本机待核对图片：${draft.image.name}`} />}<div><strong>{draft.image.name}</strong><span>{draft.image.size.toLocaleString("zh-CN")} 字节 · 原图未压缩</span><p>已选图，仅存于本机草稿；不代表已经识别或正式保存。</p><button type="button" className="intake-link" disabled={locked} onClick={() => { setConsent(false); editDraft({ image: null, recognitionRequestId: `image-recognition-${crypto.randomUUID()}`, recognitionModel: null, recognized: null, recognitionQuestions: [], imageError: "" }); }}>移除图片</button></div></div>}
+      <label className="intake-label">补充说明<textarea aria-label="图片补充说明" rows={3} value={draft.note} maxLength={2000} disabled={locked} onChange={event => { setConsent(false); editDraft({ note: event.target.value, recognitionRequestId: `image-recognition-${crypto.randomUUID()}`, recognitionModel: null }); }} placeholder="写下这张图和已有事项的关系；未知时间、地点可以留空。" /></label>
+      <CodexBridgePanel key={scope || "unavailable"} scope={scope} disabled={locked} imageReady={!!draft.image} requestId={draft.recognitionRequestId} requestModel={draft.recognitionModel} onRecognize={recognizeWithCodex} onNewRequest={() => { editDraft({ recognitionRequestId: `image-recognition-${crypto.randomUUID()}`, recognitionModel: null }); setRecognition("idle"); setMessage("已准备新的 Codex 识别；再次确认使用额度后才发送，当前图片与人工字段仍保留。"); }} />
+      {visionAvailable && <div className="intake-vision-box"><strong>可选独立 API 图片识别</strong>{visionAvailable ? <><p>本次识别会将原图和补充说明发送给 {capabilities!.vision.provider}（{capabilities!.vision.model}），按 token 计费；每天最多 {capabilities!.vision.max_daily_requests} 次。</p><p>{capabilities!.vision.pricing_text}</p><p>{capabilities!.vision.retention_text}</p><label className="intake-check"><input type="checkbox" checked={consent} disabled={locked || !draft.image} onChange={event => setConsent(event.target.checked)} /><span>我同意本次发送原图与补充说明给 OpenAI，并按 token 计费。</span></label></> : <p>{capabilities?.vision.configured ? "图片识别尚未启用。可以手动填写并核对，不会调用视觉服务。" : "尚未配置图片识别。可以选图保留草稿并手动填写；当前没有识别图片内容。"}</p>}<button type="button" className="intake-button" disabled={locked || !visionAvailable || !consent || !draft.image} onClick={() => { void recognize(); }}>{recognition === "running" ? <LoaderCircle className="spin" size={17} /> : <ImagePlus size={17} />}识别预览{visionAvailable ? "（可能收费）" : ""}</button>{visionAvailable && draft.image && (draft.recognized || recognition === "error") && <button type="button" className="intake-link" disabled={locked} onClick={() => { setConsent(false); editDraft({ recognitionRequestId: `image-recognition-${crypto.randomUUID()}`, recognitionModel: null }); setMessage("已准备一次新的识别。再次勾选费用同意后才发送，可能再次计费；原图片与字段仍保留。"); }}>准备重新识别（可能再次收费）</button>}</div>}
 
       {draft.mode === "manual" && <div className="intake-fields" aria-label="可编辑事项字段"><div className="intake-subheading"><h4>{draft.recognized ? "修订识别候选" : "手动核对事项"}</h4><span>尚未保存</span></div>
         <label className="intake-label">事项标题<input aria-label="事项标题" value={fields.title} maxLength={300} disabled={locked} onChange={event => editField("title", event.target.value)} /></label>

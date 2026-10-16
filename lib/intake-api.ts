@@ -2,7 +2,7 @@ import {AppError,type Submit} from './model';
 import type {Database,PendingImage,Repository} from './repository';
 import {buildIntakePreview} from './intake';
 import type {IntakeFields,RecognitionResult} from './intake-types';
-import {recognizeImage,visionCapabilities,VISION_MODEL,VISION_DAILY_LIMIT,type VisionConfig} from './vision';
+import {recognizeImage,parseRecognition,visionCapabilities,VISION_MODEL,VISION_DAILY_LIMIT,type VisionConfig} from './vision';
 import {shanghaiDay} from './schedule';
 
 type IntakeContext={repo:Repository;db:Database;ownerId:string};
@@ -37,6 +37,15 @@ export async function handleIntake(request:Request,path:string[],context:IntakeC
  if(!state.data)throw new AppError(409,'INITIALIZE','请先读取已初始化的项目簿。');
  if(request.method!=='POST')throw new AppError(404,'ROUTE','接口不存在');
  const input=await form(request);
+ if(path.join('/')==='intake/codex-result'){
+  if([...input.keys()].some(key=>!['image','result_json'].includes(key)||input.getAll(key).length!==1))throw new AppError(400,'CODEX_RESULT','本机识图结果包含不允许或重复的字段。');
+  const image=await prepare(input,repo,true),result=parseJSON(input.get('result_json'),'本机识图结果');
+  if(Object.keys(result).some(key=>!['result','model','request_id','image_sha256','provider','completed','cached'].includes(key))||!object(result.result)||result.completed!==true||result.provider!=='codex-local-plan'||typeof result.model!=='string'||!result.model.match(/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,99}$/)||typeof result.request_id!=='string'||!result.request_id||result.request_id.length>200||result.image_sha256!==image!.sha256||result.cached!==undefined&&typeof result.cached!=='boolean')throw new AppError(400,'CODEX_RESULT','本机识图未完整完成，或结果与当前原图不一致；没有保存事项，请保留图片和原编号。');
+  // This endpoint validates an untrusted candidate. It does not attest to a
+  // client-provided model response, invoke a provider, or write the ledger.
+  const candidate=parseRecognition(result.result,state.data.projects.map(project=>({id:project.id,name:project.name})));
+  return reply({...candidate,provider:'Codex 模型（本机 ChatGPT 授权）',model:result.model,...(result.cached===true?{cached:true}:{})});
+ }
  if(path.join('/')==='intake/preview'){
   const draft=parseJSON(input.get('draft_json'),'录入草稿'),image=await prepare(input,repo);
   if(!object(draft.fields)||typeof draft.note!=='string'||draft.note.length>2000||typeof draft.source_event_id!=='string'||!draft.source_event_id||draft.source_event_id.length>200)throw new AppError(400,'INTAKE_INPUT','录入字段、说明或来源编号无效。');

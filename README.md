@@ -98,3 +98,28 @@ node tests/calendar-ui-proof.mjs
 日历入口支持 `?view=calendar`，月份、选中日、模式和项目筛选会保存在地址参数。新项目和任务的首次登记时间由服务端生成，后续编辑不能修改；已有记录从本人操作回执按全库版本顺序分页推导，超过最近100条历史仍会继续查找。无法确认首次登记的记录单独列为未知，不以最近更新时间替代。读取日历不会回填、重写或迁移原有数据。
 
 项目周期自动包含每项任务。任务登记、计划日期、硬截止和口述完成记录使用不同标签；`completed_at`仍然只是口述完成被记录的时刻。实际进场、计划完成、实际完成由用户明确填写，完成日不自动归档或关闭任务。修改项目日期沿用版本冲突、幂等保存、回执及独立读回流程。所有日历测试只写本机隔离库或使用拦截API的虚构夹具。
+
+## 本机授权识图（Codex 模型）
+
+用户选择网页选图后通过独立授权调用 Codex 模型。现有私有站点继续负责选图、草稿、字段核对、重复检测、确认保存及回执；新增本机桥固定监听 `127.0.0.1:5197`，仅允许原站 `https://spoken-project-ledger.siounexzhao.chatgpt.site` 的配对访问。它调用官方公共 Responses API，没有 Codex CLI、代理工具、文件系统或命令执行能力，也不继承当前聊天内容或桌面登录。原图中的文字只作为低信任资料。
+
+在本项目目录中安装独立的本机依赖并启动（Node >=22.13，当前验证使用 Node 24）：
+
+```text
+npm ci --prefix scripts/codex-bridge --no-audit --no-fund
+node scripts/codex-bridge/run.mjs
+```
+
+在本机浏览器打开 `http://127.0.0.1:5197/`，先阅读披露，通过官方授权页连接本人账号。回到原站“手动模式 → 记一条新进展”，选择原图、打开本机连接页、复制一次性8位码完成配对，刷新本机授权状态，加载并选择当前账号模型，再勾选本图发送同意并点击“用Codex识别并预览”。只有账号列表中提供时才预选 `gpt-6.1-sol`。浏览器可能需要用户允许该网页访问本地网络；拒绝会保留图片草稿。电脑及本机服务须保持运行；手机不能直接连接电脑的 `127.0.0.1`。
+
+这是独立的 Sign in with ChatGPT 计划授权，使用本人计划及可用额度，不承诺免费，不增加额度，不自动启用另行付费的 GPT‑4.1 mini API。原站 `OPENAI_API_KEY` 与 `VISION_ENABLED` 继续为空/禁用。本人正式身份登录不等于已获模型调用授权；若计划不支持、授权未完成、模型不支持图片或服务拒绝，显示具体错误并允许手工填写。官方范围和限制见 [本机接入说明](https://developers.openai.com/siwc/token-sharing-open-source)、[图像与请求限制](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)。
+
+OAuth PKCE、state、nonce、签名身份、有效期及账号一致性均在本机验证；不读取旧 `auth.json` 或复制令牌。OAuth与配对令牌仅在进程内存，网页只持有临时配对令牌；重启/刷新须重新登录或配对。本机状态目录 `%LOCALAPPDATA%\SpokenProjectLedgerCodex` 仅存公共注册信息、识别结构化结果及防重计数。原图、补充说明、项目列表和秘密不写本机桥磁盘或日志。结构化结果到期7天，在启动、状态查询或下次请求时清理；请求编号、图片哈希、账号哈希、模型、状态和计数长期保留，防止重启或过期后旧编号再次消费额度。浏览器未保存原图仍按本人作用域保留于 IndexedDB，可清除本机草稿。
+
+明确识别时，将该图原始字节、补充说明及项目名称发送给 OpenAI；不发送既有任务列表或令牌给站点。请求 `store:false`、无 Files 上传，这不等于服务商零保留；具体保留与数据处理以当前账号、工作区和 [OpenAI 隐私政策](https://openai.com/policies/privacy-policy/) 及 [SIWC 条款](https://openai.com/policies/sign-in-with-chatgpt-terms/) 为准。不能把可选独立 API 的30天说明直接套用于本机计划授权。授权和配对本身不发送原图。
+
+整台本机每上海自然日最多10次新请求，失败与超时同样计数；不按项目、账号或重新配对重置。发出前持久保留原编号；原编号重复不会重发，同编号改变图片、说明、项目、模型或账号会被拒绝。相同成功内容可复用7天缓存，缓存不代表已保存事项；失败或未知结果需明确准备新识别，可能再次使用额度。
+
+识别只返回结构化候选。网页检查完成标志、模型、请求号与原图SHA后，交现有本人认证的 `POST /api/intake/codex-result` 再验证字段和日期证据，然后生成 `inspect` 零变更预览。该端点把客户端结果视为不可信资料，不是模型出处证明，也不触发模型或业务写入。只有用户明确确认后才走既有原图关联、事务保存与独立读回；不预约、发消息或推送。真实晚宴只做重复预览，不在生产新增。
+
+离线验证命令：`node --test tests/codex-identity.test.mjs tests/codex-transport.test.mjs tests/codex-bridge.test.mjs tests/codex-result.test.mjs`；网页模拟：`LEDGER_QA_BASE` 指向本机预览后运行 `node tests/codex-bridge-ui-proof.mjs`。模拟成功不能替代本人正式授权后，从原 HTTPS 网页到本机及真实截图的验收。

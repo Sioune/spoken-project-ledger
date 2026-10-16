@@ -125,7 +125,7 @@ try {
   try {
     const { page, control } = manual;
     await choosePixel(page); await page.getByLabel('图片补充说明', { exact: true }).fill('核对已有晚宴预约，原图作为附件。');
-    assert.equal(await page.getByRole('button', { name: '识别预览', exact: true }).isDisabled(), true);
+    assert.equal(await page.locator('.intake-vision-box').count(), 0);
     await manualEvent(page); await page.getByLabel('本次事项操作', { exact: true }).selectOption('create');
     const found = await preview(page); assert.equal(found.duplicate, true); assert.equal(found.changes.length, 0); assert.equal(found.fields.action, 'inspect');
     assert.equal(await page.getByRole('button', { name: '确认保存图片与事项', exact: true }).isDisabled(), true);
