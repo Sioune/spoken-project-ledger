@@ -10,6 +10,8 @@
   "actual_oauth_granted": false,
   "paid_api_enabled": false,
   "production_test_writes": 0,
-  "acceptance_boundary": "Await user official OAuth and real HTTPS-to-local connection test. Mock results are not actual image interpretation.",
+  "real_https_to_loopback_pair_and_status": "passed in original authenticated site, no image sent and quota zero",
+  "official_oauth_portal_navigation": "passed in Chrome after home-only same-origin referrer policy fix; consent handed to user",
+  "acceptance_boundary": "Await user official OAuth and real model screenshot inference. Mock results are not actual image interpretation.",
   "data_policy": "No original photo or credentials in source. Local structured results expire after seven days on access; request tombstones and quota counters persist. Browser drafts remain local until explicit save."
 }

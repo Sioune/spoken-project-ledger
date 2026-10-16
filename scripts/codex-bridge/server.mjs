@@ -200,6 +200,9 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
       response.writeHead(204); response.end(); return;
     }
     if (request.method === 'GET' && url.pathname === '/') {
+      // Preserve the same-origin form Origin; external OAuth navigation still
+      // receives no referrer. Callback pages keep the default no-referrer.
+      response.setHeader('Referrer-Policy', 'same-origin');
       store.expireResults();
       if (pair.expires <= timestamp() || pair.attempts >= 5) rotatePair();
       portalNonce = randomToken();

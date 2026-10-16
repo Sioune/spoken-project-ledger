@@ -122,18 +122,19 @@ test('本机portal不可被站点JS读取；OAuth表单要求本机Origin和CSRF
   assert.match(portal.response.headers.get('content-security-policy'), /frame-ancestors 'none'/);
   assert.ok(portal.html.indexOf('不读取已有 Codex 凭据') < portal.html.indexOf('通过官方页面连接 Codex</button>'));
   for (const disclosure of ['不额外开启 API 付费', '不承诺免费', 'store:false', '不等于零保留', '长期保留用于防重', 'sign-in-with-chatgpt-terms']) assert.ok(portal.html.includes(disclosure));
-  assert.equal(portal.response.headers.get('referrer-policy'), 'no-referrer'); assert.equal(portal.response.headers.get('cache-control'), 'no-store');
+  assert.equal(portal.response.headers.get('referrer-policy'), 'same-origin'); assert.equal(portal.response.headers.get('cache-control'), 'no-store');
   assert.equal((await env.request('/', { auth: false })).status, 403);
   const submit = (nonce, origin) => env.request('/portal/connect', { method: 'POST', auth: false, origin,
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf: nonce }) });
   assert.equal((await submit(portal.nonce, SITE_ORIGIN)).status, 403);
+  assert.equal((await submit(portal.nonce, 'null')).status, 403);
   assert.equal((await submit('incorrect', env.base)).status, 403);
   const login = await submit(portal.nonce, env.base); assert.equal(login.status, 303);
   assert.equal(new URL(login.headers.get('location')).origin, 'https://auth.openai.com');
   const callback = await env.request('/auth/callback?code=HIDDEN-CODE&state=HIDDEN-STATE', { auth: false, origin: null });
-  assert.equal(callback.status, 200); assert.doesNotMatch(await callback.text(), /HIDDEN-CODE|HIDDEN-STATE/);
+  assert.equal(callback.status, 200); assert.equal(callback.headers.get('referrer-policy'), 'no-referrer'); assert.doesNotMatch(await callback.text(), /HIDDEN-CODE|HIDDEN-STATE/);
   const failed = await env.request('/auth/callback?error=provider_error&state=HIDDEN-STATE', { auth: false, origin: null });
-  assert.equal(failed.status, 400); assert.doesNotMatch(await failed.text(), /SECRET|HIDDEN-STATE|provider_error/);
+  assert.equal(failed.status, 400); assert.equal(failed.headers.get('referrer-policy'), 'no-referrer'); assert.doesNotMatch(await failed.text(), /SECRET|HIDDEN-STATE|provider_error/);
   await env.pair();
   const latest = await env.portal();
   assert.equal((await env.request('/portal/logout', { method: 'POST', origin: env.base, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf: latest.nonce }) })).status, 200);
