@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties, type Keyboard
 import { CalendarDays, ChevronLeft, ChevronRight, CircleAlert, Clock3, FolderClosed, RefreshCw } from "lucide-react";
 import { isCalendarDate, toShanghaiDate, type CalendarData, type CalendarProject, type CalendarTask } from "@/lib/calendar";
 import "./calendar.css";
+import { getItemType, getEventDate, getEventStatus } from "@/lib/schedule";
 
 export type CalendarViewProps = {
   data: CalendarData | null;
@@ -64,6 +65,7 @@ function writeSelection(selection: CalendarSelection, data: CalendarData) {
 }
 
 function nodeFor(task: CalendarTask): TaskNode {
+  if (getItemType(task) === "event") { const date = getEventDate(task); if (date) return { task, date, label: "活动日期 · 开始时间独立于登记日", kind: "planned" }; }
   const completed = task.status === "done" ? toShanghaiDate(task.completed_at) : null;
   if (completed) return { task, date: completed, label: "口述完成记录", kind: "completed" };
   if (isCalendarDate(task.planned_date)) return { task, date: task.planned_date, label: task.status === "done" ? "计划任务日 · 完成时刻未知" : "计划任务日", kind: "planned" };
@@ -79,6 +81,8 @@ function DateValue({ value }: { value: string | null }) {
 }
 
 function Status({ task }: { task: CalendarTask }) {
+  if (getItemType(task) === "event") return <span className="calendar-task-status">{{ reserved: "已预约", planned: "已安排", completed: "活动已完成", cancelled: "活动已取消" }[getEventStatus(task)]}</span>;
+  if (getItemType(task) === "reference") return <span className="calendar-task-status">参考资料</span>;
   return <span className={`calendar-task-status calendar-task-status-${task.status}`}>{STATUS[task.status]}</span>;
 }
 

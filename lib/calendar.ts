@@ -1,4 +1,4 @@
-import type {TaskStatus} from './model';
+import type {TaskStatus,ItemType,EventStatus} from './model';
 
 export const CALENDAR_TIMEZONE='Asia/Shanghai' as const;
 export type RegistrationSource='recorded'|'history'|'unknown';
@@ -6,6 +6,7 @@ export type CalendarRegistration={registered_at:string|null;registration_source:
 export type CalendarTask=CalendarRegistration&{
  id:string;project_id:string;title:string;status:TaskStatus;next_action:string;dependencies:string[];
  planned_date:string|null;due_at:string|null;completed_at:string|null;
+ item_type?:ItemType;event_status?:EventStatus;event_date?:string|null;start_at?:string|null;location?:string|null;fact_date?:string|null;fact_at?:string|null;attachment_ids?:string[];
 };
 export type CalendarProject=CalendarRegistration&{
  id:string;name:string;status:string;start_date:string|null;target_end_date:string|null;completed_date:string|null;

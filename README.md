@@ -16,6 +16,8 @@
 - Asia/Shanghai，每2小时整点、工作时段配置；默认关闭；没有后台推送或新增提醒。
 - JSON导出与确认恢复，恢复不重放提醒历史。
 - 私有Site及7个MCP工具，浏览器与工具均使用同一D1库；显式结构化提交和JSON保底提交共享权限、校验和幂等回执。
+- 图片录入：选原图、补充说明、视觉识别或手动填写、可编辑预览、查重、确认保存、独立回执读回。未经配置和授权时不会调用视觉服务，页面明确显示手动模式。
+- 今天／明天分别列执行任务和活动；预约不是已完成任务，活动日期不使用上传日期。旧的“已预约活动｜”记录只读兼容，不自动改写数据。
 
 ## 运行
 
@@ -25,6 +27,7 @@
 npm ci --prefer-offline --no-audit --no-fund
 node scripts/run-framework.mjs build
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_outstanding_ultimatum.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0001_sharp_yellowjacket.sql
 node scripts/run-framework.mjs dev --port 5186
 ```
 
@@ -68,9 +71,27 @@ node tests/calendar-ui-proof.mjs
 
 `completed_at`当前表示用户口述报告被记录的时间，实际更早完成时刻未知。呈现时应称“口述记录时间”，不可当作已核实的现实发生时刻。当前界面没有单独展示该字段为“实际完成时间”；交接已注明语义。本次视觉改版只调整前端展示，未更改模型、写入、MCP、数据库迁移或权限逻辑。
 
-附件本体仍在Library，应用只保存索引。定时备份、物理删除、关闭网页后的推送、自动催人、外发和版权提交均未启用。撤销若存在任何后续编辑会阻止自动覆盖，需先核对差异。
+既有Library附件仍只保存索引；图片录入确认保存的原图另存于现有私有D1，按本人身份读取。定时备份、物理删除、关闭网页后的推送、自动催人、外发和版权提交均未启用。撤销若存在任何后续编辑会阻止自动覆盖，需先核对差异。
 
 私有Site身份、版本、部署回执见交付文件。没有新账号、付费服务或硬编码密钥。
+
+## 图片事项录入与视觉配置
+
+在“手动模式 → 记一条新进展”中选择PNG、JPEG或WebP原图，单张不超过1,500,000字节。不接受SVG、GIF或伪造文件类型，不缩小图片后冒充原图。未保存图片、说明、预览字段和待确认问题保留在本机IndexedDB，按已认证的本人作用域隔离；可清除本机草稿。上传校验时间、首次登记时间与活动/事实发生时间独立。
+
+识别将新增任务、已有任务进展、已预约活动、完成凭证与参考资料分开。日期缺年、时间来源不明、说明与图片冲突或意图不清时保留空值及确认问题。完成凭证不直接完成原任务；识别无权预约、付款、发消息或设置推送。图片文字和识别输出均视为不可信资料，模型没有工具，服务端只接收固定结构字段。
+
+预览不写业务库。精确重复默认只查看；需要为既有事项补原图时明确选择“仅关联原图”，不改原事项日期/状态。保存时原图、事项和操作回执在一个D1事务中提交；失败或版本冲突不留孤立图片。相同操作编号和原请求重试沿用原回执；相同原图及同日期时间/地点的预约有额外重复保护。确认前不保存原图到服务端，识别结果缓存不代表事项已保存。
+
+可选视觉服务固定为OpenAI GPT‑4.1 mini，只有获得用户付费及授权确认后，才通过OpenAI Developers插件的密钥授权流程配置服务端秘密 `OPENAI_API_KEY`，并设置服务端 `VISION_ENABLED=true`；不得把密钥放前端、Git或聊天记录。未配置/未启用时提供手动填写及明确错误，不伪装已识别。`/api/intake/capabilities`只返回是否配置及服务说明，不返回密钥。
+
+启用后每位本人每天（上海时区）最多10次新识别，单次最多1500输出token。公开费率：输入$0.40、输出$1.60/百万token，图片折算输入token，实际费用以账单为准。失败尝试计入每日上限，网络超时可能已计费。同一识别编号不会再次调用；成功的同图同说明结果可复用7天缓存。改变图片或说明要明确发起新识别。原图、说明和项目名称会发送至OpenAI，现有任务内容不外传；每次发送前页面要求勾选知情同意。
+
+请求使用 `store:false` 且不创建Files文件，这不等于零保留；API数据默认不用于训练，滥用监测通常最长保留30天，法律、安全及图像审核有例外，详见[官方数据政策](https://developers.openai.com/api/docs/guides/your-data)。本站仅缓存结构化识别结果/安全错误码7天，在下一次识别访问时清理过期缓存。确认保存的原图长期保存在现有私有数据库，撤销事项不物理删除原图，以便原回执核对。未保存草稿由用户清除或浏览器清理；本机共享设备需考虑浏览器存储可见性。
+
+新增迁移0001仅创建图片和识别缓存表，不修改既有表数据、owner或MCP路由。已有本机库只应用尚未应用的0001；全新库按顺序各应用一次。原7个dot工具保持名称与鉴权，仅增加可选事项元数据；工具不能上传任意图片字节或取得服务端密钥。
+
+图片专项验证：`node --test tests/intake-model.test.mjs tests/image-intake.test.mjs tests/vision.test.mjs`；本机端到端用 `node tests/image-intake-flow-proof.mjs`，纯模拟视觉/失败恢复UI用 `node tests/image-intake-ui-proof.mjs`。前者只允许经身份核验的本机地址，原图由 `LEDGER_QA_IMAGE_PATH` 指定且不入Git；后者不调用真实视觉服务。模拟测试通过不能称为真实视觉API已通过。
 
 ## 日历日期语义
 

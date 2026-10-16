@@ -8,6 +8,7 @@ export const changeValuesSchema = {
   status:{type:'string',enum:['todo','doing','waiting','blocked','done','cancelled','active','paused','archived','open','resolved']},
   next_action:{type:'string'}, source_ref:{type:'string',description:'用户自述或外部证据的来源说明；补记来源不会把补记时刻当作现实发送时间。'},
   planned_date:{type:['string','null'],description:'真实YYYY-MM-DD日期，空值表示未设置'},
+  item_type:{type:'string',enum:['task','event','reference']},event_status:{type:'string',enum:['reserved','planned','completed','cancelled']},event_date:{type:['string','null']},start_at:{type:['string','null'],description:'活动开始时间，ISO8601含时区；不是截止时间'},fact_date:{type:['string','null']},fact_at:{type:['string','null'],description:'用户报告的事实发生时间，ISO8601含时区；不替代提交时间或旧completed_at'},location:{type:['string','null']},attachment_ids:{type:'array',items:{type:'string',pattern:'^img_[a-f0-9]{64}$'}},
   due_at:{type:['string','null'],description:'ISO8601，需含时区'}, review_at:{type:['string','null'],description:'ISO8601，需含时区'},
   waiting_for:{type:['string','null']}, expected_result:{type:['string','null']},
   dependencies:{type:'array',items:{type:'string'}}, verification_state:{type:'string',enum:['user_reported','unverified','confirmed']},

@@ -1,6 +1,8 @@
 function isCalendarDate(value:unknown):value is string{if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||value.startsWith('0000'))return false;const instant=new Date(`${value}T00:00:00.000Z`);return Number.isFinite(instant.getTime())&&instant.toISOString().slice(0,10)===value;}
 export type TaskStatus = 'todo'|'doing'|'waiting'|'blocked'|'done'|'cancelled';
-export type Task = {id:string;project_id:string;parent_id?:string|null;title:string;status:TaskStatus;next_action:string;dependencies:string[];version:number;updated_at:string;created_at?:string;completed_at?:string|null;planned_date?:string|null;due_at?:string|null;waiting_for?:string|null;expected_result?:string|null;review_at?:string|null;verification_state:string;source_ref:string};
+export type ItemType='task'|'event'|'reference';
+export type EventStatus='reserved'|'planned'|'completed'|'cancelled';
+export type Task = {id:string;project_id:string;parent_id?:string|null;title:string;status:TaskStatus;next_action:string;dependencies:string[];version:number;updated_at:string;created_at?:string;completed_at?:string|null;planned_date?:string|null;due_at?:string|null;waiting_for?:string|null;expected_result?:string|null;review_at?:string|null;verification_state:string;source_ref:string;item_type?:ItemType;event_status?:EventStatus;event_date?:string|null;start_at?:string|null;fact_date?:string|null;fact_at?:string|null;location?:string|null;attachment_ids?:string[]};
 export type Project = {id:string;name:string;goal:string;status:string;completion_rule:string;external_links:string[];version:number;created_at?:string;start_date?:string|null;target_end_date?:string|null;completed_date?:string|null};
 export type Doc = {id:string;project_id:string;task_id?:string;filename:string;versions:{id:string;library_ref:string;summary:string;created_at:string;checksum?:string}[];current_version:string;accepted_version?:string|null};
 export type Ledger = {projects:Project[];tasks:Task[];documents:Doc[];pending:{id:string;question:string;status:string;context:string;answer?:string;resolved_at?:string}[];settings:{timezone:string;intervalHours:number;workStart:string;workEnd:string;enabled:boolean};reminderLog:unknown[]};
@@ -11,6 +13,40 @@ export const normalize = (s:string) => s.normalize('NFKC').toLowerCase().replace
 const uid = () => crypto.randomUUID();
 const clone = <T>(v:T):T => structuredClone(v);
 const str=(v:unknown,max=1000) => {if(typeof v!=='string'||v.length>max)throw new AppError(400,'INVALID','文本字段无效或过长');return v.trim()};
+const intakeFields=['item_type','event_status','event_date','start_at','fact_date','fact_at','location','attachment_ids'];
+const validInstant=(value:unknown):value is string=>typeof value==='string'&&isCalendarDate(value.slice(0,10))&&/^\d{4}-\d{2}-\d{2}T/.test(value)&&/(Z|[+-]\d{2}:\d{2})$/.test(value)&&Number.isFinite(Date.parse(value));
+const shanghaiDate=(value:string)=>new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value));
+function intakeValues(values:Record<string,unknown>){
+ const parsed:Record<string,unknown>={};
+ for(const key of intakeFields){if(values[key]===undefined)continue;const value=values[key];
+  if(key==='item_type'||key==='event_status'){if(typeof value!=='string'||!(key==='item_type'?['task','event','reference']:['reserved','planned','completed','cancelled']).includes(value))throw new AppError(400,'FIELD','事项类型或活动状态无效');parsed[key]=value;}
+  else if(key==='attachment_ids'){if(!Array.isArray(value)||value.length>20||value.some(id=>typeof id!=='string'||!/^img_[a-f0-9]{64}$/.test(id))||new Set(value).size!==value.length)throw new AppError(400,'ATTACHMENT','原图引用须为不重复的本人图片编号');parsed[key]=[...value];}
+  else if(value===null||value==='')parsed[key]=null;
+  else if(key==='location')parsed[key]=str(value,2000);
+  else{if(!(key==='event_date'||key==='fact_date'?isCalendarDate(value):validInstant(value)))throw new AppError(400,'DATE','活动/事实日期和时间须为真实日期及含时区的ISO时间');parsed[key]=value;}
+ }
+ return parsed;
+}
+function eventStateValues(values:Record<string,unknown>,current?:Task):{status?:TaskStatus;event_status?:EventStatus}{
+ if((values.item_type??current?.item_type)!=='event')return {};
+ const hasStatus=values.status!==undefined,hasEventStatus=values.event_status!==undefined;
+ const status=(values.status??current?.status??'todo') as TaskStatus,eventStatus=values.event_status as EventStatus;
+ if(hasStatus&&hasEventStatus){
+  const compatible=eventStatus==='completed'?status==='done':eventStatus==='cancelled'?status==='cancelled':status!=='done'&&status!=='cancelled';
+  if(!compatible)throw new AppError(400,'EVENT_STATUS_CONFLICT','活动状态与业务状态矛盾：活动完成对应done，活动取消对应cancelled，预约或安排中不能同时为已完成或已取消');
+  return {};
+ }
+ if(hasEventStatus)return {status:eventStatus==='completed'?'done':eventStatus==='cancelled'?'cancelled':'todo'};
+ if(!current||current.item_type!=='event'||hasStatus&&status!==current.status)return {event_status:status==='done'?'completed':status==='cancelled'?'cancelled':'planned'};
+ return {};
+}
+function eventIdentity(task:Task){
+ const legacy=!task.item_type&&task.title.startsWith('已预约活动｜')&&(isCalendarDate(task.planned_date)||validInstant(task.due_at));
+ if(task.item_type!=='event'&&!legacy||task.status==='cancelled'||task.event_status==='cancelled')return null;
+ const start=validInstant(task.start_at)?task.start_at:legacy&&validInstant(task.due_at)?task.due_at:null;
+ const date=start?shanghaiDate(start):task.event_date??(legacy?task.planned_date:null),location=task.location?normalize(task.location):'';
+ return date?{date,start:start?Date.parse(start):null,location}:null;
+}
 export function seed(now=new Date().toISOString()):Ledger {
  const specs=[['p-contract','罗莱家纺合同','先审核合同，再发送罗莱家纺'],['p-gravity','语义引力','UI设计 → 发张锦华 → 等跑通反馈'],['p-registration','杨浦公司注册','深析材料 → 选择谈判对象 → 推进实际注册'],['p-topics','选题网站 / 2.0','记录现有Codex项目状态与成果，执行状态未核'],['p-copyright','凤阙九死红果','补材包已交；未提交、未上线；现有13总装21:26.928'],['p-teaser','teaser','制作发送已完成，等待松叶反馈'],['p-inbox','收件箱','尚未归属项目的明确本人待办']];
  const data:Ledger={projects:specs.map(([id,name,goal])=>({id,name,goal,status:'active',completion_rule:'用户核实全部关键后续后确认归档',external_links:[],version:1,created_at:now})),tasks:[],documents:[],pending:[{id:'q-topics',question:'选题网站 / 2.0 的当前状态及现有执行入口是什么？',status:'open',context:'由用户的新Codex对话开发，本应用不接管。'},{id:'q-contact',question:'松叶与宋业是否为同一人？',status:'open',context:'当前等待对象保留“松叶”，未合并联系人。'}],settings:{timezone:'Asia/Shanghai',intervalHours:2,workStart:'09:00',workEnd:'19:00',enabled:false},reminderLog:[]};
@@ -31,6 +67,8 @@ function validate(data:Ledger){
  }
  const ids=new Set(data.tasks.map(t=>t.id)); if(ids.size!==data.tasks.length)throw new AppError(400,'DUPLICATE_ID','任务ID重复');
  for(const t of data.tasks){
+  intakeValues(t as unknown as Record<string,unknown>);
+  if(t.event_date&&t.start_at&&shanghaiDate(t.start_at)!==t.event_date||t.fact_date&&t.fact_at&&shanghaiDate(t.fact_at)!==t.fact_date)throw new AppError(400,'DATE_CONFLICT','日期与时间须属于同一个上海自然日');
   for(const value of [t.id,t.project_id,t.title,t.next_action,t.verification_state])if(typeof value!=='string'||!value.trim())throw new AppError(400,'TASK_FIELD','任务必填字段不能为空');if(!Array.isArray(t.dependencies)||t.dependencies.some(x=>typeof x!=='string')||!Number.isInteger(t.version)||!Number.isFinite(Date.parse(t.updated_at)))throw new AppError(400,'TASK_FIELD','任务依赖或版本无效');
    for(const key of ['due_at','review_at'] as const)if(t[key]&&(!/(Z|[+-]\d\d:\d\d)$/.test(t[key])||!Number.isFinite(Date.parse(t[key]))))throw new AppError(400,'DATE','时间需包含时区');if(t.planned_date&&!isCalendarDate(t.planned_date))throw new AppError(400,'DATE','计划日须为真实的YYYY-MM-DD日期');if(!['user_reported','unverified','confirmed'].includes(t.verification_state))throw new AppError(400,'VERIFICATION','核实状态无效');
   if(!data.projects.some(p=>p.id===t.project_id))throw new AppError(400,'PROJECT','项目不存在');
@@ -50,26 +88,32 @@ export function applyChanges(current:Ledger,changes:Change[],now:string,occurred
    if(Object.prototype.hasOwnProperty.call(v,'created_at'))throw new AppError(400,'FIELD','登记时间由服务端记录，不能由客户端设置或修改');
   if(c.type==='create'){
    const title=str(v.title,300);if(!title)throw new AppError(400,'TITLE','请输入任务名称');
-   const project_id=str(v.project_id??'p-inbox',100);const exact=data.tasks.find(t=>t.project_id===project_id&&normalize(t.title)===normalize(title)&&t.status!=='cancelled');if(exact)continue;
-   const candidate=data.tasks.find(t=>t.project_id===project_id&&t.status!=='cancelled'&&Math.min(normalize(t.title).length,normalize(title).length)>3&&(normalize(t.title).includes(normalize(title))||normalize(title).includes(normalize(t.title))));
+   const metadata=intakeValues(v),eventState=eventStateValues({...v,...metadata});
+   const proposed={title,status:(v.status??'todo'),planned_date:v.planned_date,due_at:v.due_at,...metadata,...eventState} as Task,proposedEvent=eventIdentity(proposed);
+   if(proposedEvent?.location){const candidate=data.tasks.find(task=>{const key=eventIdentity(task);return key&&key.date===proposedEvent.date&&key.location===proposedEvent.location&&(key.start===null||proposedEvent.start===null||key.start===proposedEvent.start);});if(candidate)throw new AppError(409,'DUPLICATE_EVENT','已有相同日期、时间和地点的预约，请核对现有事项',{candidate});}
+   const separateEvent=(other:Task)=>{const key=eventIdentity(other);return !!(proposedEvent&&key&&(proposedEvent.date!==key.date||proposedEvent.start!==null&&key.start!==null&&proposedEvent.start!==key.start||proposedEvent.location&&key.location&&proposedEvent.location!==key.location));};
+   const project_id=str(v.project_id??'p-inbox',100);const exact=data.tasks.find(t=>t.project_id===project_id&&normalize(t.title)===normalize(title)&&t.status!=='cancelled'&&!separateEvent(t));if(exact)continue;
+   const candidate=data.tasks.find(t=>t.project_id===project_id&&t.status!=='cancelled'&&!separateEvent(t)&&Math.min(normalize(t.title).length,normalize(title).length)>3&&(normalize(t.title).includes(normalize(title))||normalize(title).includes(normalize(t.title))));
    if(candidate)throw new AppError(409,'POSSIBLE_DUPLICATE','发现相近待办，请核实是已有任务还是新任务',{candidate});
    const id=c.id?str(c.id,100):uid();if(data.tasks.some(t=>t.id===id))throw new AppError(409,'DUPLICATE_ID','任务ID已存在');
     const t:Task={id,project_id,title,status:(v.status?str(v.status,30):'todo') as TaskStatus,next_action:typeof v.next_action==='string'&&v.next_action.trim()?str(v.next_action):title,parent_id:typeof v.parent_id==='string'&&v.parent_id?v.parent_id:null,dependencies:Array.isArray(v.dependencies)?v.dependencies.map(x=>str(x,100)):[],version:1,updated_at:now,created_at:now,completed_at:null,verification_state:v.verification_state?str(v.verification_state,100):'user_reported',source_ref:typeof v.source_ref==='string'?str(v.source_ref):'用户自述'};
-   for(const k of ['planned_date','due_at','review_at','waiting_for','expected_result'] as const){const value=v[k];t[k]=value===undefined||value===null||value===''?null:str(value,2000)}if(t.status==='done')t.completed_at=occurredAt;data.tasks.push(t);effective.push({...c,id,values:t});
+   Object.assign(t,metadata,eventState);for(const k of ['planned_date','due_at','review_at','waiting_for','expected_result'] as const){const value=v[k];t[k]=value===undefined||value===null||value===''?null:str(value,2000)}if(t.status==='done')t.completed_at=occurredAt;data.tasks.push(t);effective.push({...c,id,values:t});
   }else if(c.type==='update'){
    const t=data.tasks.find(t=>t.id===c.id);if(!t)throw new AppError(404,'TASK','任务不存在');
    if(new Date(occurredAt).getTime()<new Date(t.updated_at).getTime()-1000)throw new AppError(409,'STALE_EVENT','这条输入早于当前事实，请读取最新状态再确认',{task:t});
-   const allowed=['title','project_id','status','next_action','planned_date','due_at','waiting_for','expected_result','review_at','dependencies','verification_state','source_ref','parent_id'];const delta:Record<string,unknown>={};
+   const allowed=['title','project_id','status','next_action','planned_date','due_at','waiting_for','expected_result','review_at','dependencies','verification_state','source_ref','parent_id',...intakeFields];const delta:Record<string,unknown>={};
    for(const [k,original]of Object.entries(v)){
     const val=original===''&&!['title','project_id','status','next_action','verification_state','source_ref'].includes(k)?null:original;
     if(!allowed.includes(k))throw new AppError(400,'FIELD','不允许修改字段：'+k);
     if(['title','project_id','status','next_action','verification_state','source_ref'].includes(k)&&(val===null||typeof val!=='string'||!val.trim()))throw new AppError(400,'FIELD','此字段不能为空：'+k);
-    if(k==='dependencies'){if(!Array.isArray(val))throw new AppError(400,'DEPENDENCY','依赖必须为数组');delta[k]=val.map(x=>str(x,100));}
+    if(intakeFields.includes(k))Object.assign(delta,intakeValues({[k]:val}));
+    else if(k==='dependencies'){if(!Array.isArray(val))throw new AppError(400,'DEPENDENCY','依赖必须为数组');delta[k]=val.map(x=>str(x,100));}
     else{delta[k]=val===null?null:str(val,k==='title'?300:2000);if(['due_at','review_at'].includes(k)&&val!==null&&(!String(val).match(/(Z|[+-]\d\d:\d\d)$/)||!Number.isFinite(Date.parse(String(val)))))throw new AppError(400,'DATE','时间需包含时区');if(k==='planned_date'&&val!==null&&!isCalendarDate(val))throw new AppError(400,'DATE','计划日须为真实的YYYY-MM-DD日期');}
    }
+   const eventDelta=eventStateValues(delta,t);Object.assign(delta,eventDelta);
    if(typeof delta.status==='string'&&['doing','waiting','done'].includes(delta.status))activeUpdates.add(t.id);
    if(Object.entries(delta).every(([k,val])=>JSON.stringify(t[k as keyof Task])===JSON.stringify(val)))continue;
-   const oldStatus=t.status,oldCompletedAt=t.completed_at;Object.assign(t,delta,{version:t.version+1,updated_at:now});t.completed_at=t.status==='done'?(oldStatus==='done'?oldCompletedAt:occurredAt):null;effective.push(c);
+   const oldStatus=t.status,oldCompletedAt=t.completed_at;Object.assign(t,delta,{version:t.version+1,updated_at:now});t.completed_at=t.status==='done'?(oldStatus==='done'?oldCompletedAt:occurredAt):null;effective.push({...c,values:{...v,...eventDelta}});
   }else if(c.type==='project'){
    let p=data.projects.find(p=>p.id===c.id);if(!p){p={id:c.id??uid(),name:str(v.name,300),goal:str(v.goal??'',2000),status:'active',completion_rule:'用户确认关键后续完成后归档',external_links:[],version:1,created_at:now};data.projects.push(p)}else p.version++;
    for(const [k,val] of Object.entries(v)){if(k==='external_links'){if(!Array.isArray(val))throw new AppError(400,'LINK','入口必须为数组');p.external_links=val.map(x=>{const link=str(x,1000);if(!/^(https:\/\/|codex:\/\/threads\/)/.test(link))throw new AppError(400,'LINK','仅接受已核实的HTTPS或Codex任务入口');return link})}else if(['start_date','target_end_date','completed_date'].includes(k)){if(val!==null&&val!==''&&!isCalendarDate(val))throw new AppError(400,'DATE','项目日期须为真实的YYYY-MM-DD日期');(p as unknown as Record<string,unknown>)[k]=val===''?null:val;}else if(['name','goal','status','completion_rule'].includes(k)){(p as unknown as Record<string,unknown>)[k]=str(val,2000)}else throw new AppError(400,'FIELD','项目字段无效')}
@@ -102,7 +146,9 @@ export function applyChanges(current:Ledger,changes:Change[],now:string,occurred
  }
  // A released prerequisite makes the next action available; it never completes it.
  for(const t of data.tasks){if(t.status==='blocked'&&t.dependencies.length&&t.dependencies.every(id=>data.tasks.find(d=>d.id===id)?.status==='done')){t.status=t.waiting_for?'waiting':'todo';t.version++;t.updated_at=now;effective.push({type:'update',id:t.id,values:{status:t.status}})}else if(t.status==='todo'&&t.dependencies.some(id=>data.tasks.find(d=>d.id===id)?.status!=='done')){t.status='blocked';t.version++;t.updated_at=now;effective.push({type:'update',id:t.id,values:{status:'blocked'}})}}
- validate(data);return {data,effective};
+ validate(data);
+ for(const task of data.tasks){const identity=eventIdentity(task);if(!identity?.location)continue;const previous=current.tasks.find(t=>t.id===task.id);if(previous&&JSON.stringify(eventIdentity(previous))===JSON.stringify(identity))continue;const candidate=data.tasks.find(other=>{if(other.id===task.id)return false;const key=eventIdentity(other);return key&&key.date===identity.date&&key.location===identity.location&&(key.start===null||identity.start===null||key.start===identity.start);});if(candidate)throw new AppError(409,'DUPLICATE_EVENT','已有相同日期、时间和地点的预约，请核对现有事项',{candidate});}
+ return {data,effective};
 }
 // A spoken status must resolve against the current ledger, never seed IDs or old source text.
 function teaserPreview(text:string,data:Ledger,negative:boolean){

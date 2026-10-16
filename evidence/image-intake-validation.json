@@ -1,0 +1,38 @@
+{
+  "date": "2026-10-16",
+  "scope": "Existing private spoken-project-ledger, same D1 and seven MCP tools",
+  "native_image_intake_previously_available": false,
+  "real_vision_api_verified": false,
+  "real_provider_calls": 0,
+  "paid_service_approval": "pending; provider disabled without server configuration and user authorization",
+  "original_screenshot_test": {
+    "bytes": 712812,
+    "interpretation_source": "Manual fields from user-specified acceptance facts; not a real provider response",
+    "local_end_to_end_checks": 9,
+    "original_bytes_readback_match": true,
+    "existing_event_preview_no_create": true,
+    "link_only_keeps_original_business_fields": true,
+    "repeat_submit_no_extra_item_or_image": true,
+    "stale_cas_no_orphan_image": true,
+    "today_tomorrow_and_event_task_separation": true,
+    "production_business_writes": 0
+  },
+  "checks_passed": {
+    "unit_tests": 107,
+    "typecheck": true,
+    "production_build": true,
+    "real_local_d1": 5,
+    "http": 10,
+    "mcp": 8,
+    "browser_main": 11,
+    "browser_detail": 4,
+    "image_ui_fixture": {"scenarios":8,"checks":40,"real_provider_calls":0},
+    "dependency_flow": 32,
+    "calendar_flow": 12,
+    "calendar_ui": 48,
+    "settings_preview": 8,
+    "readability": {"screens":34,"viewport_widths":[1440,390,320],"page_errors":0,"failures":0}
+  },
+  "private_runtime_evidence": ".sites-runtime/image-intake-flow-proof and .sites-runtime/image-intake-ui-proof; real personal image excluded from Git",
+  "deployment": "Recorded separately after native Sites deployment and production read-only comparison; this file is not a deployment success receipt"
+}

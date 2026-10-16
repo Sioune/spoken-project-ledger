@@ -4,13 +4,31 @@ export type Statement={bind:(...v:unknown[])=>Statement;first:<T=Record<string,u
 export type Database={prepare:(sql:string)=>Statement;batch:(s:Statement[])=>Promise<unknown[]>};
 type Row={id:number;owner_id:string;revision:number;data:string;last_operation:string};
 type Op={id:string;owner_id:string;idempotency_key:string;source_event_id:string;payload_hash:string;receipt:string;created_at:string};
+export type PendingImage={id:string;owner_id:string;sha256:string;mime_type:'image/png'|'image/jpeg'|'image/webp';byte_size:number;uploaded_at:string;bytes:ArrayBuffer};
+type ImageRow=Omit<PendingImage,'bytes'>&{bytes:ArrayBuffer|Uint8Array|number[]};
 type CalendarHistoryRow={id:string;created_at:string;result_version:number|null;undo_of:string|null;valid_shape:number;changes:string;before_tasks:string;after_tasks:string;before_projects:string;after_projects:string};
 export type Receipt={state:string;operation_id:string;result_version:number;created_at:string;occurred_at:string;timezone:string;changes:unknown[];before:Ledger;after:Ledger;source_event_id:string;raw_text:string;undo_of?:string;duplicate?:boolean;current_revision?:number;verification?:string};
 const canonical=(v:unknown):string=>v===null||typeof v!=='object'?JSON.stringify(v):Array.isArray(v)?'['+v.map(canonical).join(',')+']':'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical((v as Record<string,unknown>)[k])).join(',')+'}';
 async function hash(v:unknown){const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonical(v)));return Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('')}
+async function imageHash(bytes:ArrayBuffer){const digest=await crypto.subtle.digest('SHA-256',bytes);return Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('')}
 export class Repository{
  constructor(private db:Database,private owner:string){if(!owner)throw new AppError(401,'AUTH','请先以本人身份登录')}
  async state(){const row=await this.db.prepare('SELECT * FROM ledgers WHERE id=1').first<Row>();if(row&&row.owner_id!==this.owner)throw new AppError(403,'OWNER_ONLY','仅本人可以访问此状态库');return row}
+ async prepareImage(bytes:ArrayBuffer,mime:string):Promise<PendingImage>{
+  if(!await this.state())throw new AppError(409,'INITIALIZE','请先初始化状态库');
+  if(!(bytes instanceof ArrayBuffer)||!bytes.byteLength||bytes.byteLength>1500000)throw new AppError(413,'IMAGE_SIZE','原图须为1至1,500,000字节；不会缩图冒充原图');
+  const copy=bytes.slice(0),b=new Uint8Array(copy),type=mime.toLowerCase();
+  const png=b.length>=8&&[137,80,78,71,13,10,26,10].every((v,i)=>b[i]===v),jpeg=b.length>=3&&b[0]===255&&b[1]===216&&b[2]===255,webp=b.length>=12&&String.fromCharCode(...b.slice(0,4))==='RIFF'&&String.fromCharCode(...b.slice(8,12))==='WEBP';
+  if(!(['image/png','image/jpeg','image/webp'].includes(type))||!(type==='image/png'&&png||type==='image/jpeg'&&jpeg||type==='image/webp'&&webp))throw new AppError(415,'IMAGE_TYPE','仅接受内容与类型一致的PNG、JPEG或WEBP原图');
+  const sha256=await imageHash(copy),id='img_'+await hash({owner:this.owner,sha256});
+  return {id,owner_id:this.owner,sha256,mime_type:type as PendingImage['mime_type'],byte_size:copy.byteLength,uploaded_at:new Date().toISOString(),bytes:copy};
+ }
+ async image(id:string):Promise<PendingImage>{
+  await this.state();const image=await this.db.prepare('SELECT * FROM images WHERE id=? AND owner_id=?').bind(id,this.owner).first<ImageRow>();
+  if(!image)throw new AppError(404,'IMAGE','本人原图不存在或不可访问');
+  const bytes=image.bytes instanceof ArrayBuffer?image.bytes.slice(0):Uint8Array.from(image.bytes).buffer;
+  return {...image,bytes};
+ }
  async initialize(){
   const existing=await this.state();if(existing)return {initialized:true,revision:existing.revision,data:JSON.parse(existing.data),operation_id:'initialize',duplicate:true};
   const now=new Date().toISOString(),data=seed(now),before={...data,projects:[],tasks:[],documents:[],pending:[]};
@@ -66,25 +84,40 @@ export class Repository{
   if(unknownCount)warnings.push(`${unknownCount} 项任务或项目缺少可靠首次登记时间，已标为未知；编辑、口述和恢复时间均未代替登记。`);
   const registration=(kind:'task'|'project',id:string)=>registrations.get(`${kind}:${id}`)??{registered_at:null,registration_source:'unknown' as const};
   return {revision:row?.revision??0,timezone:'Asia/Shanghai',generated_at:new Date().toISOString(),history_complete,warnings,
-   tasks:data.tasks.map(t=>({...registration('task',t.id),id:t.id,project_id:t.project_id,title:t.title,status:t.status,next_action:t.next_action,dependencies:[...t.dependencies],planned_date:t.planned_date??null,due_at:t.due_at??null,completed_at:t.completed_at??null})),
+   tasks:data.tasks.map(t=>({...registration('task',t.id),id:t.id,project_id:t.project_id,title:t.title,status:t.status,next_action:t.next_action,dependencies:[...t.dependencies],planned_date:t.planned_date??null,due_at:t.due_at??null,completed_at:t.completed_at??null,
+    ...(t.item_type!==undefined?{item_type:t.item_type}:{}),...(t.event_status!==undefined?{event_status:t.event_status}:{}),...(t.event_date!==undefined?{event_date:t.event_date}:{}),...(t.start_at!==undefined?{start_at:t.start_at}:{}),...(t.location!==undefined?{location:t.location}:{}),...(t.fact_date!==undefined?{fact_date:t.fact_date}:{}),...(t.fact_at!==undefined?{fact_at:t.fact_at}:{}),...(t.attachment_ids!==undefined?{attachment_ids:[...t.attachment_ids]}:{})})),
    projects:data.projects.map(p=>({...registration('project',p.id),id:p.id,name:p.name,status:p.status,start_date:p.start_date??null,target_end_date:p.target_end_date??null,completed_date:p.completed_date??null}))};
  }
- async commit(input:Submit){
+ async commit(input:Submit,image?:PendingImage){
   if(!input||typeof input!=='object')throw new AppError(400,'INPUT','请求无效');
   for(const k of ['operation_id','idempotency_key','source_event_id','occurred_at','raw_text'] as const)if(typeof input[k]!=='string'||input[k].length>(k==='raw_text'?10000:250))throw new AppError(400,'INPUT','缺少或无效字段：'+k);
   if(!input.operation_id||!input.idempotency_key||!input.source_event_id||!Number.isInteger(input.base_version)||!Number.isFinite(Date.parse(input.occurred_at)))throw new AppError(400,'INPUT','操作编号、版本或发生时间无效');
   if(Date.parse(input.occurred_at)>Date.now()+300000)throw new AppError(400,'FUTURE_EVENT','发生时间超前，请确认时区');
   if(input.changes?.some(c=>c.type==='restore'||(c.type==='project'&&c.values?.status==='archived'))&&!input.confirmed)throw new AppError(400,'CONFIRM','恢复或归档需核对影响后确认');
+  if(image){
+   if(image.owner_id!==this.owner)throw new AppError(403,'IMAGE_OWNER','原图只能由本人关联');
+   const checked=await this.prepareImage(image.bytes,image.mime_type);
+   if(image.id!==checked.id||image.sha256!==checked.sha256||image.byte_size!==checked.byte_size||!Number.isFinite(Date.parse(image.uploaded_at)))throw new AppError(400,'IMAGE_INTEGRITY','原图校验失败，请重新选择原图');
+   if(!input.changes?.some(c=>['create','update'].includes(c.type)&&Array.isArray(c.values?.attachment_ids)&&c.values.attachment_ids.includes(image!.id)))throw new AppError(400,'IMAGE_NOT_REFERENCED','请在本次确认事项中关联所选原图');
+   image={...checked,uploaded_at:image.uploaded_at};
+  }
   const payloadHash=await hash({source_event_id:input.source_event_id,base_version:input.base_version,occurred_at:input.occurred_at,raw_text:input.raw_text,changes:input.changes,undo_of:input.undo_of??null});
   const existing=await this.db.prepare('SELECT * FROM operations WHERE owner_id=? AND (id=? OR idempotency_key=? OR source_event_id=?)').bind(this.owner,input.operation_id,input.idempotency_key,input.source_event_id).first<Op>();
   if(existing){if(existing.payload_hash!==payloadHash)throw new AppError(409,'IDEMPOTENCY_MISMATCH','相同操作、来源或幂等编号已用于不同内容，请核对原回执');return {...await this.receipt(existing.id),duplicate:true}}
   const row=await this.state();if(!row)throw new AppError(409,'INITIALIZE','请先初始化状态库');
   if(row.revision!==input.base_version)throw new AppError(409,'REVISION_CONFLICT','当前状态已有更新，请刷新并核对差异',{current_revision:row.revision,current_data:JSON.parse(row.data)});
-  const now=new Date().toISOString(),before=JSON.parse(row.data) as Ledger,{data:after,effective}=applyChanges(before,input.changes,now,input.occurred_at);
+  const now=new Date().toISOString(),before=JSON.parse(row.data) as Ledger;
+  for(const change of input.changes??[]){if(change.type!=='create'||!Array.isArray(change.values?.attachment_ids))continue;const candidate=before.tasks.find(task=>task.attachment_ids?.some(id=>(change.values.attachment_ids as unknown[]).includes(id)));if(candidate)throw new AppError(409,'DUPLICATE_IMAGE','原图已关联已有事项，请核对该记录后补充',{candidate});}
+  const {data:after,effective}=applyChanges(before,input.changes,now,input.occurred_at);
+  for(const change of effective){if(change.type!=='create')continue;const task=after.tasks.find(t=>t.id===change.id);const candidate=after.tasks.find(other=>other.id!==task?.id&&other.attachment_ids?.some(id=>task?.attachment_ids?.includes(id)));if(candidate)throw new AppError(409,'DUPLICATE_IMAGE','同一原图不能重复新建事项，请核对已有记录',{candidate});}
+  const attachmentIds=new Set(after.tasks.flatMap(task=>task.attachment_ids??[]));
+  if(image&&!attachmentIds.has(image.id))throw new AppError(400,'IMAGE_NOT_REFERENCED','本次没有保存原图关联，请核对现有事项');
+  for(const id of attachmentIds){if(image?.id===id)continue;const owned=await this.db.prepare('SELECT id FROM images WHERE id=? AND owner_id=?').bind(id,this.owner).first();if(!owned)throw new AppError(404,'IMAGE','引用的本人原图不存在或不可访问');}
   const receipt:Receipt={state:'saved',operation_id:input.operation_id,result_version:row.revision+1,created_at:now,occurred_at:input.occurred_at,timezone:after.settings.timezone,changes:effective,before,after,source_event_id:input.source_event_id,raw_text:input.raw_text,...(input.undo_of?{undo_of:input.undo_of}:{})};
   try{
    await this.db.batch([
     this.db.prepare('UPDATE ledgers SET data=?,revision=revision+1,last_operation=? WHERE id=1 AND owner_id=? AND revision=?').bind(JSON.stringify(after),input.operation_id,this.owner,input.base_version),
+    ...(image?[this.db.prepare('INSERT OR IGNORE INTO images (id,owner_id,sha256,mime_type,byte_size,uploaded_at,bytes) SELECT ?,?,?,?,?,?,? FROM ledgers WHERE id=1 AND owner_id=? AND last_operation=? AND revision=?').bind(image.id,this.owner,image.sha256,image.mime_type,image.byte_size,image.uploaded_at,image.bytes,this.owner,input.operation_id,row.revision+1)]:[]),
     this.db.prepare('INSERT INTO operations (id,owner_id,idempotency_key,source_event_id,payload_hash,receipt,created_at) SELECT ?,?,?,?,?,?,? FROM ledgers WHERE id=1 AND owner_id=? AND last_operation=? AND revision=?').bind(input.operation_id,this.owner,input.idempotency_key,input.source_event_id,payloadHash,JSON.stringify(receipt),now,this.owner,input.operation_id,row.revision+1)
    ]);
   }catch{
