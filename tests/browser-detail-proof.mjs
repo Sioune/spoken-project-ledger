@@ -1,7 +1,9 @@
+import {base,verifyLocalLedger} from './local-base.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {chromium} from '../.sites-runtime/browser-qa/node_modules/playwright-core/index.mjs';
-const base='http://127.0.0.1:5186',browser=await chromium.launch({executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true});const context=await browser.newContext({viewport:{width:1280,height:900}}),page=await context.newPage();
+await verifyLocalLedger();
+const browser=await chromium.launch({executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true});const context=await browser.newContext({viewport:{width:1280,height:900}}),page=await context.newPage();
 try{
  await page.goto(base+'/signin-with-chatgpt?return_to=/');await page.getByRole('heading',{name:'今天，推进一件件。'}).waitFor();await page.getByRole('button',{name:'新建任务',exact:true}).click();
  const title='虚构详情验收 '+crypto.randomUUID();await page.getByLabel('任务名称',{exact:true}).fill(title);await page.getByLabel('下一步').fill('核对真实字段保存');await page.getByLabel('业务状态').selectOption('waiting');await page.getByLabel('等待对象',{exact:true}).fill('虚构对象');await page.getByLabel('等待的结果',{exact:true}).fill('虚构验收反馈');await page.getByLabel('计划日期 · 可留空',{exact:true}).fill('2026-10-16');

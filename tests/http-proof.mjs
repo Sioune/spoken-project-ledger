@@ -1,6 +1,8 @@
+import {base,verifyLocalLedger} from './local-base.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-const base='http://127.0.0.1:5186';
+await verifyLocalLedger();
+
 const publicRead=await fetch(base+'/api/state');assert.equal(publicRead.status,401);
 const forged=await fetch(base+'/api/state',{headers:{'oai-authenticated-user-id':'forged','oai-authenticated-user-email':'forged@example.test'}});assert.equal(forged.status,401);
 const signed=await fetch(base+'/signin-with-chatgpt?return_to=/',{redirect:'manual'});const cookie=signed.headers.get('set-cookie')?.split(';')[0];assert.ok(cookie);

@@ -33,6 +33,7 @@ node scripts/run-framework.mjs dev --port 5186
 ```text
 node node_modules/typescript/bin/tsc --noEmit
 node --test tests/repository.test.mjs
+node --test tests/preview-rounds.test.mjs
 node tests/d1-proof.mjs
 node tests/http-proof.mjs
 ```
@@ -45,7 +46,10 @@ node tests/browser-proof.mjs
 node tests/browser-detail-proof.mjs
 node tests/mcp-submit-proof.mjs
 node tests/readability-proof.mjs
+node tests/settings-preview-proof.mjs
 ```
+
+四项写入回归顺序为 HTTP → MCP → browser → browser-detail。默认本机端口 5186 被占用时，使用另一个端口启动项目簿并设置 `LEDGER_QA_BASE=http://127.0.0.1:该端口`；只接受本机 HTTP，并在写入前核对项目簿 MCP 服务身份。可读性测试同端口通过 `QA_BASE` 设置。
 
 测试用虚构更新不进入生产库。内部截图、本地状态、浏览器档案、临时依赖均在Git忽略目录中。
 

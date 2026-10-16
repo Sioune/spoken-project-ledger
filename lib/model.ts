@@ -81,25 +81,87 @@ export function applyChanges(current:Ledger,changes:Change[],now:string,occurred
  for(const t of data.tasks){if(t.status==='blocked'&&t.dependencies.length&&t.dependencies.every(id=>data.tasks.find(d=>d.id===id)?.status==='done')){t.status=t.waiting_for?'waiting':'todo';t.version++;t.updated_at=now;effective.push({type:'update',id:t.id,values:{status:t.status}})}else if(t.status==='todo'&&t.dependencies.some(id=>data.tasks.find(d=>d.id===id)?.status!=='done')){t.status='blocked';t.version++;t.updated_at=now;effective.push({type:'update',id:t.id,values:{status:'blocked'}})}}
  validate(data);return {data,effective};
 }
+// A spoken status must resolve against the current ledger, never seed IDs or old source text.
+function teaserPreview(text:string,data:Ledger,negative:boolean){
+ const ask=(question:string)=>({changes:[] as Change[],questions:[question],summary:'尚未保存；请先核对本次对应的任务与轮次。'});
+ if(negative||/是否|如果|假如|失败|出错|报错|异常|退回|撤回|(?:收到.*反馈|完成.*修订)后|^(?:新增|新建|添加|记下|帮我记)/.test(text))return ask('这条包含计划、否定、疑问、新增或异常情况。请在任务详情核对具体任务与本次事实，暂不改变已有状态。');
+ const mentioned=data.projects.filter(p=>normalize(p.name).length>1&&normalize(text).includes(normalize(p.name)));
+ const projects=data.projects.filter(p=>/teaser/i.test(p.name)||data.tasks.some(t=>t.project_id===p.id&&/teaser/i.test(t.title)));
+ const selected=mentioned.length?projects.filter(p=>mentioned.some(m=>m.id===p.id)):projects;
+ if(selected.length!==1||mentioned.some(p=>p.id!==selected[0]?.id))return ask('请明确这次 teaser 属于哪个项目；混合项目的内容暂不合并更新。');
+ const project=selected[0],tasks=data.tasks.filter(t=>t.project_id===project.id&&t.status!=='cancelled');
+ const remaining=new Set(tasks.map(t=>t.id)),groups:Task[][]=[];
+ while(remaining.size){
+  const group:Task[]=[],queue=[remaining.values().next().value!];
+  while(queue.length){const id=queue.pop()!;if(!remaining.delete(id))continue;const task=tasks.find(t=>t.id===id)!;group.push(task);for(const other of tasks)if(remaining.has(other.id)&&(task.dependencies.includes(other.id)||other.dependencies.includes(id)||task.parent_id===other.id||other.parent_id===id))queue.push(other.id);}
+  if(/teaser/i.test(project.name)||group.some(t=>/teaser/i.test(t.title)))groups.push(group);
+ }
+ if(!groups.length)return ask('实时库中没有找到可定位的 teaser 任务，请先选择或新建具体任务。');
+ const dates=(value:string)=>{
+  const found:{year:string;month:number;day:number}[]=[];
+  for(const match of value.matchAll(/(?:(20\d{2})年)?(\d{1,2})月(\d{1,2})日?/g))found.push({year:match[1]??'',month:Number(match[2]),day:Number(match[3])});
+  for(const match of value.matchAll(/(20\d{2})-(\d{2})-(\d{2})/g))found.push({year:match[1],month:Number(match[2]),day:Number(match[3])});
+  return found;
+ };
+ const roundNumber=(value:string)=>{
+  if(/^\d+$/.test(value))return String(Number(value));
+  const digits:Record<string,number>={'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9};
+  if(value==='十')return '10';if(value.includes('十')){const [tens,ones]=value.split('十');return String((digits[tens]??1)*10+(digits[ones]??0));}return String(digits[value]??value);
+ };
+ const rounds=(value:string)=>Array.from(value.matchAll(/第([一二三四五六七八九十\d]+)轮/g),m=>roundNumber(m[1]));
+ const inputDates=dates(text),inputRounds=rounds(text);
+ if(new Set(inputDates.map(d=>`${d.month}-${d.day}`)).size>1||new Set(inputRounds).size>1||/(?:上一轮|上轮|前一轮).*(?:新一轮|本轮|这轮)|(?:新一轮|本轮|这轮).*(?:上一轮|上轮|前一轮)/.test(text))return ask('这条提到了多个日期或轮次，请分开说明每一轮对应的任务和事实。');
+ let candidates=groups;
+ const namedById=(task:Task)=>new RegExp(`(?<![A-Za-z0-9_-])${task.id.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}(?![A-Za-z0-9_-])`).test(text);
+ const quotedTitle=(task:Task)=>[['“','”'],['"','"'],["'","'"],['「','」'],['《','》']].some(([left,right])=>text.includes(`${left}${task.title}${right}`));
+ const explicit=tasks.filter(t=>namedById(t)||quotedTitle(t)||((dates(t.title).length||rounds(t.title).length)&&normalize(text).includes(normalize(t.title))));
+ if(explicit.length)candidates=candidates.filter(g=>explicit.some(t=>g.includes(t)));
+ if(inputDates.length)candidates=candidates.filter(g=>g.some(t=>dates(`${t.title} ${t.planned_date??''}`).some(d=>inputDates.every(i=>i.month===d.month&&i.day===d.day&&(!i.year||!d.year||i.year===d.year)))));
+ if(inputRounds.length)candidates=candidates.filter(g=>g.some(t=>rounds(t.title).some(r=>inputRounds.includes(r))));
+ if(candidates.length!==1)return ask('实时库中存在多个或尚未匹配的 teaser 轮次。请提供具体任务、任务编号或该轮标题中的日期，暂不改变前轮记录。');
+ const group=candidates[0];
+ if(explicit.some(t=>!group.includes(t)))return ask('这条同时指向不同轮次，请分开核对，暂不改变任何一轮。');
+ if(/新一轮|上一轮|上轮|前一轮/.test(text)&&!inputDates.length&&!inputRounds.length&&!group.some(t=>/新一轮|上一轮|上轮|前一轮/.test(t.title)))return ask('不能仅凭“新一轮”或“上一轮”推定已有任务，请明确任务编号、标题或日期。');
+ let factText=text;
+ for(const task of explicit)for(const [left,right] of [['“','”'],['"','"'],["'","'"],['「','」'],['《','》']])factText=factText.replaceAll(`${left}${task.title}${right}`,'');
+ const titleContacts=(task:Task)=>Array.from(task.title.matchAll(/(?:发给|发送给|给|同步)\s*([\p{L}\p{N}·._-]{1,30})$/gu),m=>m[1]);
+ const waitingContacts=group.filter(t=>t.verification_state!=='unverified'&&t.waiting_for&&!/待核|待确认|未知|不明|[\/／]/.test(t.waiting_for)).map(t=>t.waiting_for!.trim());
+ const contacts=new Set(waitingContacts.length?waitingContacts:group.flatMap(titleContacts));
+ const contactName=(value:string)=>value.replace(/^(?:今天|现在)?(?:已(?:经)?)?收到/,'').replace(/^(?:今天|现在)/,'').replace(/的$/,'');
+ const receivers=Array.from(factText.matchAll(/(?:发给|发送给|同步(?:给)?|(?:发送|发了|已发)[^，。；,;！？?]{0,40}?给)\s*([^\s，。；,;！？?]{1,50})/g),m=>m[1].split(/了|并|后|现在|等待/)[0]);
+ const speakers=Array.from(factText.matchAll(/(?:^|[\s，,；;。])([\p{Script=Han}A-Za-z·]{2,12})(?:说|的反馈)/gu),m=>contactName(m[1]));
+ const feedbackNames=Array.from(factText.matchAll(/([\p{Script=Han}·]{2,12})反馈(?:已经|已|收)/gu),m=>contactName(m[1])).filter(c=>!['现在','这次','本次','本轮','这轮','上一轮','新一轮','已经','所有','全部'].includes(c));
+ const receivedFrom=Array.from(factText.matchAll(/收到\s*([^，。；,;\s]*?)反馈/gu),m=>m[1].replace(/teaser/gi,'').replace(/的$/,'')).filter(c=>c&&!/^(?:了|一条|新的|最新|这轮|本轮|该轮|对方|他|她|他们)$/.test(c));
+ const waitingOn=Array.from(factText.matchAll(/等(?:待)?\s*([^，。；,;\s]*?)反馈/gu),m=>m[1].replace(/teaser/gi,'').replace(/的$/,'')).filter(c=>c&&!/^(?:对方|他|她|他们)$/.test(c));
+ const otherKnown=data.tasks.flatMap(t=>t.waiting_for?[t.waiting_for.trim()]:[]).filter(c=>c&&!contacts.has(c)&&factText.includes(c));
+ if([...receivers,...speakers,...feedbackNames,...receivedFrom,...waitingOn,...otherKnown].some(c=>!contacts.has(c)))return ask('本次提到的对象与该轮实时等待对象尚未匹配，请先确认联系人，暂不改名或改变状态。');
+ const edit=/(?:已(?:经)?(?:更新|修订|修改|制作)|(?:更新|修订|修改|制作)(?:完成|完了|好了|好|完|了)|改好|做好)/.test(factText);
+ const send=/(?:已(?:经)?(?:发出|发给|发送|同步)|(?:发出|发给|发送|同步)[^，,；;。！？?!]{0,50}(?:了|完成))/.test(factText);
+ const feedback=/(?:收到[^，,；;。！？?!]*反馈|反馈[^，,；;。！？?!]*(?:收到|已到|到了))/.test(factText);
+ const waiting=/等(?:待)?[^，,；;。！？?!]*反馈/.test(factText);
+ if(feedback&&waiting)return ask('同一条同时表示收到反馈与继续等待反馈，请明确是哪一轮、哪一步。');
+ const intents=[...(edit?['edit']:[]),...(send?['send']:[]),...(feedback||waiting?['feedback']:[])];
+ if(!intents.length)return ask('未识别到明确完成事实。请在任务详情选择具体步骤，计划与否定不会写成完成。');
+ const roles=(task:Task)=>[...(/更新|修订|修改|制作|剪辑/.test(task.title)?['edit']:[]),...(/发送|发给|发出|同步/.test(task.title)?['send']:[]),...(/反馈/.test(task.title)?['feedback']:[])];
+ const changes:Change[]=[];
+ for(const intent of intents){
+  const matches=group.filter(t=>roles(t).includes(intent));
+  if(matches.length!==1||roles(matches[0]).length!==1)return ask('该轮步骤尚不能唯一拆分为制作、发送或反馈。请在任务详情核对完成范围，暂不把整轮或前轮标为完成。');
+  const task=matches[0];
+  if(intent==='feedback'&&waiting&&(!task.waiting_for||task.status==='done'))return ask('该反馈任务缺少明确等待对象，或已完成。请先核对，暂不重新打开或改写它。');
+  changes.push({type:'update',id:task.id,values:{status:intent==='feedback'&&waiting?'waiting':'done'}});
+ }
+ if(changes.some(c=>tasks.find(t=>t.id===c.id)!.dependencies.some(id=>data.tasks.find(t=>t.id===id)?.status!=='done'&&!changes.some(other=>other.id===id&&other.values.status==='done'))))return ask('该步骤的前序任务尚未完成。请先核对实际完成范围，不能跳过依赖。');
+ if(/周|明天|后天|下次|提醒/.test(text))return ask('请分别确认本次事实与复查的具体日期时间（Asia/Shanghai），暂不混合写入未确认事项。');
+ return {changes,questions:[] as string[],summary:'已按实时任务和依赖匹配制作、发送与反馈；请核对本轮目标后保存。'};
+}
 export function preview(text:string,data:Ledger,base_version:number,source_event_id:string,occurred_at:string){
  text=str(text,10000);const questions:string[]=[],changes:Change[]=[];let summary='请检查变更后保存。';
  if(!text)throw new AppError(400,'EMPTY','请输入口述文字');
  const negation=/(准备|打算|应该|可能|预计|计划|未|没|不|并非|否|无需|[？?吗])/;
  const negative=negation.test(text);
- if(/teaser/i.test(text)&&/(发|更新|改好|反馈)/.test(text)){
-  {
-   const receiver=text.match(/(?:发给|发了给|发送给)\s*([^，。；,;\s了]+?)(?:了|，|。|；|,|;|\s|$)/)?.[1];
-   const receiverUnclear=!!receiver&&receiver!=='松叶'||/宋业/.test(text);
-   const affirmative=text.split(/[，,；;。]|但是|但|不过/).filter(s=>!negation.test(s)).join('，');
-   if(/已(?:经)?更新|更新(?:好|完|完成|了)|改好|做好/.test(affirmative))changes.push({type:'update',id:'t-teaser-edit',values:{status:'done'}});
-   if(!receiverUnclear&&/已(?:经)?.*发|发.*了|发出了/.test(affirmative))changes.push({type:'update',id:'t-teaser-send',values:{status:'done'}});
-   if(!receiverUnclear&&/收到.*反馈|反馈.*(?:收到|已到)/.test(affirmative))changes.push({type:'update',id:'t-teaser-feedback',values:{status:'done'}});
-   else if(!receiverUnclear&&/等(?:待)?.*反馈|等松叶/.test(affirmative))changes.push({type:'update',id:'t-teaser-feedback',values:{status:'waiting',waiting_for:data.tasks.find(t=>t.id==='t-teaser-feedback')?.waiting_for??'松叶',expected_result:'teaser反馈；松叶 / 宋业关系待核'}});
-   if(receiverUnclear)questions.push('原记录等待对象为“松叶”，本次对象“'+(receiver??'宋业')+'”尚未核实。请确认新任务或在详情明确改名。');
-   if(!changes.length&&!receiverUnclear)questions.push('未识别到明确完成事实。请在任务详情选择具体步骤，计划与否定不会写成完成。');
-   if(/周|明天|后天|下次|提醒/.test(text))questions.push('请确认复查的具体日期与时间（Asia/Shanghai），本次先保留明确制作/发送事实。');
-   summary='制作、发送与反馈分开保存。没有设置未确认的复查时间。';
-  }
+ if(/teaser/i.test(text)&&/(发|更新|修订|修改|制作|同步|改好|完成|反馈)/.test(text)){
+  const parsed=teaserPreview(text,data,negative);changes.push(...parsed.changes);questions.push(...parsed.questions);summary=parsed.summary;
  }else if(/都做完|全部完成|全部关闭|上线|注册完成|已提交/.test(text)){
   questions.push('请选定任务并核对完成范围及证据，避免关闭尚有后续的步骤。');summary='重大状态变更需要明确任务范围。';
  }else{

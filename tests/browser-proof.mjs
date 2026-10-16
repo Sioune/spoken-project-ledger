@@ -1,7 +1,10 @@
+import {base,verifyLocalLedger} from './local-base.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import {chromium} from '../.sites-runtime/browser-qa/node_modules/playwright-core/index.mjs';
-const base='http://127.0.0.1:5186',output='.sites-runtime/browser-proof';fs.mkdirSync(output,{recursive:true});
+await verifyLocalLedger();
+const output='.sites-runtime/browser-proof';fs.mkdirSync(output,{recursive:true});
+
 const browser=await chromium.launch({executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true,args:['--disable-gpu']});
 const errors=[];const context=await browser.newContext({viewport:{width:1440,height:1000},locale:'zh-CN'});const page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
 try{

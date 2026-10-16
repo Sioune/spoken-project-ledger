@@ -1,6 +1,8 @@
+import {base,verifyLocalLedger} from './local-base.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-const base='http://127.0.0.1:5186';
+await verifyLocalLedger();
+
 const signed=await fetch(base+'/signin-with-chatgpt?return_to=/',{redirect:'manual'});const cookie=signed.headers.get('set-cookie')?.split(';')[0];assert.ok(cookie);
 async function rpc(name,args,cookieValue=cookie){const r=await fetch(base+'/mcp',{method:'POST',headers:{'Content-Type':'application/json',...(cookieValue?{cookie:cookieValue}:{})},body:JSON.stringify({jsonrpc:'2.0',id:crypto.randomUUID(),method:'tools/call',params:{name,arguments:args}})});assert.equal(r.status,200);return (await r.json()).result}
 const original=JSON.parse(fs.readFileSync('tests/mcp-parent-payload.json','utf8'));
