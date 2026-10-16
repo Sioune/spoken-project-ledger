@@ -37,6 +37,7 @@ function stateFor(calendar, revision = calendar.revision) {
 }
 
 async function capture(page, name) {
+  await page.locator('.calendar-page-header h1').click();
   await page.screenshot({ path: path.join(out, `${name}.png`), fullPage: true });
   screenshots.push(`${name}.png`);
 }
@@ -132,6 +133,7 @@ try {
       await page.getByRole('button', { name: '每日登记', exact: true }).click();
       const targetSizes = await page.locator('.calendar-day, .calendar-mode button, .calendar-icon-button, .calendar-today, .calendar-refresh').evaluateAll(elements => elements.filter(e => e.tagName === 'BUTTON').map(e => { const rect = e.getBoundingClientRect(); return { width: rect.width, height: rect.height, label: e.getAttribute('aria-label') || e.textContent }; }));
       assert.ok(targetSizes.every(size => size.width >= 43.5 && size.height >= 44), JSON.stringify({ width, undersized: targetSizes.filter(size => size.width < 43.5 || size.height < 44) }));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${width}: daily calendar overflow`);
       checks.push({ width, shanghaiFirstRegistration: true, completionAndEditDoNotMoveRegistration: true, unknownDatesRemainExplicit: true, dateKeyboardAndMonths: true, projectFilterPersistsBetweenModes: true, everyTaskAutomaticallyHasNode: true, registeredNodeFallbackIsLabeled: true, firstRegistrationShownOnEveryDatedNode: true, projectObservationNotActualStart: true, taskAndProjectEditorCallbacks: true, urlRestoredAfterReload: true, otherQueryPreserved: true, noHorizontalOverflow: true, touchTargets44: true });
     } finally { await context.close(); }
   }
