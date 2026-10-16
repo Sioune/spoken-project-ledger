@@ -12,7 +12,11 @@ export async function runBridge() {
   const redirectUri = `http://127.0.0.1:${BRIDGE_PORT}/auth/callback`;
   const identity = createIdentity({ hostId: store.hostId, registration: store.registration,
     saveRegistration: registration => store.saveRegistration(registration), redirectUri });
-  const bridge = createBridgeServer({ store, identity, recognizer: recognizeWithPlan, origin: SITE_ORIGIN, port: BRIDGE_PORT });
+  // Diagnostics contain framing categories only: never response text, image
+  // bytes, notes, project names, request headers or credentials.
+  const recognizer = (input, options) => recognizeWithPlan(input, { ...options,
+    onDiagnostic: value => console.log('识图格式诊断 ' + JSON.stringify(value)) });
+  const bridge = createBridgeServer({ store, identity, recognizer, origin: SITE_ORIGIN, port: BRIDGE_PORT });
   try { await bridge.listen(); }
   catch (error) { store.close(); throw error; }
   console.log(`项目簿本机 Codex 桥已运行：http://127.0.0.1:${BRIDGE_PORT}/`);

@@ -123,3 +123,5 @@ OAuth PKCE、state、nonce、签名身份、有效期及账号一致性均在本
 识别只返回结构化候选。网页检查完成标志、模型、请求号与原图SHA后，交现有本人认证的 `POST /api/intake/codex-result` 再验证字段和日期证据，然后生成 `inspect` 零变更预览。该端点把客户端结果视为不可信资料，不是模型出处证明，也不触发模型或业务写入。只有用户明确确认后才走既有原图关联、事务保存与独立读回；不预约、发消息或推送。真实晚宴只做重复预览，不在生产新增。
 
 离线验证命令：`node --test tests/codex-identity.test.mjs tests/codex-transport.test.mjs tests/codex-bridge.test.mjs tests/codex-result.test.mjs`；网页模拟：`LEDGER_QA_BASE` 指向本机预览后运行 `node tests/codex-bridge-ui-proof.mjs`。模拟成功不能替代本人正式授权后，从原 HTTPS 网页到本机及真实截图的验收。
+
+2026-10-17 实测记录：用户已完成官方授权，原站核验计划权限和本人模型目录成功。第一次使用中性说明发送真实晚宴原图，但返回流被 `PLAN_STREAM` 拒绝，候选未采用，生产未保存。随后补齐通用 `event: message` 包装兼容，仍要求完整 `response.completed` 与严格字段，并将流类型、JSON和事件结构错误分开。55项相关测试通过；诊断日志仅含受控阶段、HTTP状态、内容类型类别、长度及白名单事件类型，不记原文或秘密。加载修复重启后的同应用返回登录，在OpenAI官方页面出现 `Operation timed out` / “无法检查权限是否可用”，没有回调；真实识图仍待验证，不能把此次兼容修复说成已通过真实截图验收。保留原注册信息、图片草稿和失败编号，不换应用或计费路径。

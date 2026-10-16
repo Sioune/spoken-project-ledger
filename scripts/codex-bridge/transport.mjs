@@ -5,6 +5,17 @@ const ENDPOINT = 'https://api.openai.com/v1/responses';
 const MAXIMUM_STREAM = 1048576;
 const fail = (status, code, message) => new PlanError(status, code, message);
 const object = value => !!value && typeof value === 'object' && !Array.isArray(value);
+const diagnosticEvent = value => typeof value === 'string' && /^[a-zA-Z0-9_.:-]{1,100}$/.test(value)
+  && (value.startsWith('response.') || ['message', 'error', 'ping', 'keepalive'].includes(value)) ? value : 'other';
+function contentTypeClass(value) {
+  const mime = (value ?? '').split(';', 1)[0].trim().toLowerCase();
+  if (!mime) return 'missing';
+  if (mime === 'text/event-stream') return 'event-stream';
+  if (mime === 'application/json' || mime.endsWith('+json')) return 'json';
+  if (mime === 'text/html') return 'html';
+  if (mime.startsWith('text/')) return 'text';
+  return 'other';
+}
 
 function providerError(status, code) {
   if (code === 'subscription_sharing_usage_limit_exceeded' || status === 429) return fail(429, 'PLAN_USAGE_LIMIT', 'ChatGPT计划额度已达上限，请查看ChatGPT用量设置后再试。');
@@ -42,7 +53,7 @@ function completedResult(response) {
   try { return validateRawRecognition(result); } catch { throw fail(502, 'PLAN_SCHEMA', '识图结果不符合允许的字段结构，原图草稿仍保留。'); }
 }
 
-export async function recognizeWithPlan({ identity, bytes, mime_type, note = '', projects = [], model } = {}, { fetchImpl = globalThis.fetch, timeoutMs = 120000, signal } = {}) {
+export async function recognizeWithPlan({ identity, bytes, mime_type, note = '', projects = [], model } = {}, { fetchImpl = globalThis.fetch, timeoutMs = 120000, signal, onDiagnostic } = {}) {
   if (!(bytes instanceof Uint8Array) || !bytes.byteLength || bytes.byteLength > 1500000) throw fail(413, 'IMAGE_SIZE', '原图大小须在1,500,000字节以内。');
   if (!imageValid(bytes, mime_type)) throw fail(415, 'IMAGE_TYPE', '只支持真实的PNG、JPEG或WebP原图。');
   if (typeof note !== 'string' || note.length > 5000 || !Array.isArray(projects) || projects.length > 1000 || projects.some(project => !object(project) || typeof project.name !== 'string' || !project.name.trim() || project.name.length > 300) || typeof model !== 'string' || !model || model.length > 200) throw fail(400, 'RECOGNITION_INPUT', '识图说明、项目名称或模型选择无效。');
@@ -68,7 +79,18 @@ export async function recognizeWithPlan({ identity, bytes, mime_type, note = '',
       if (!initialAccount || identity.status().account_key !== initialAccount) throw fail(409, 'OAUTH_SUPERSEDED', 'ChatGPT账号连接已更换，请重新预览。');
       const response = await fetchImpl(ENDPOINT, { method: 'POST', redirect: 'error', signal: controller.signal, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify({ model, instructions: recognitionInstructions, input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ note, project_names: projects.map(project => project.name) }) }, { type: 'input_image', image_url: `data:${mime_type};base64,${Buffer.from(bytes).toString('base64')}`, detail: 'high' }] }], tools: [], text: { format: { type: 'json_schema', name: 'project_ledger_image_intake', strict: true, schema: recognitionSchema } }, store: false, stream: true }) });
       if (!response.ok) { try { await response.body?.cancel(); } catch { /* Do not read sensitive provider diagnostics. */ } throw providerError(response.status); }
-      if (!response.body || !response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) throw fail(502, 'PLAN_STREAM', '识图服务没有返回完整的流式响应。');
+      const contentType = contentTypeClass(response.headers.get('content-type'));
+      function diagnostic(stage, dataLength = 0, eventName, eventType) {
+        if (typeof onDiagnostic !== 'function') return;
+        const metadata = Object.freeze({ stage, http_status: response.status, content_type: contentType,
+          data_length: dataLength, event_name: diagnosticEvent(eventName), event_type: diagnosticEvent(eventType) });
+        // Logging is opt-in. A diagnostic consumer cannot change recognition behavior.
+        try { void Promise.resolve(onDiagnostic(metadata)).catch(() => {}); } catch { /* No raw errors are logged. */ }
+      }
+      if (!response.body || contentType !== 'event-stream') {
+        diagnostic('http');
+        throw fail(502, 'PLAN_STREAM_TYPE', '识图服务未返回可读取的SSE流式响应，原图草稿仍保留。');
+      }
       if (Number(response.headers.get('content-length')) > MAXIMUM_STREAM) throw fail(502, 'PLAN_RESPONSE_SIZE', '识图响应过大，已停止处理。');
       reader = response.body.getReader(); const decoder = new TextDecoder('utf-8', { fatal: true }); let buffer = '', dataLines = [], eventName = '', size = 0;
       function dispatch() {
@@ -76,8 +98,14 @@ export async function recognizeWithPlan({ identity, bytes, mime_type, note = '',
         const data = dataLines.join('\n'); dataLines = []; const name = eventName; eventName = '';
         if (data === '[DONE]') throw fail(502, 'PLAN_INCOMPLETE', '识图连接已结束，但尚未确认完成。');
         let event;
-        try { event = JSON.parse(data); } catch { throw fail(502, 'PLAN_STREAM', '识图数据流格式无效。'); }
-        if (!object(event) || typeof event.type !== 'string' || name && name !== event.type) throw fail(502, 'PLAN_STREAM', '识图事件格式无效。');
+        try { event = JSON.parse(data); } catch {
+          diagnostic('json', Buffer.byteLength(data), name);
+          throw fail(502, 'PLAN_STREAM_JSON', '识图SSE事件不是有效JSON，原图草稿仍保留。');
+        }
+        if (!object(event) || typeof event.type !== 'string' || name && name !== 'message' && name !== event.type) {
+          diagnostic('event', Buffer.byteLength(data), name, object(event) ? event.type : undefined);
+          throw fail(502, 'PLAN_STREAM_EVENT', '识图SSE事件结构或事件名称不匹配，原图草稿仍保留。');
+        }
         if (toolType(event.type) || event.type.includes('refusal')) throw fail(502, 'PLAN_TOOL_CALL', '识图返回了工具请求或拒绝响应，已停止处理。');
         if (event.item !== undefined) inspectItem(event.item);
         if (event.part !== undefined && (!object(event.part) || !['output_text', 'reasoning_text', 'summary_text'].includes(event.part.type))) throw fail(502, 'PLAN_REFUSAL', 'ChatGPT没有提供可用识图内容。');

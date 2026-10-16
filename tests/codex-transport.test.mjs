@@ -54,7 +54,7 @@ test('图片类型、魔数、大小及输入上限在模型请求前校验', as
 
 test('只收到文本delta、[DONE]或非流JSON均不能作为成功识图', async () => {
   for (const response of [stream(event({ type: 'response.output_text.delta', delta: JSON.stringify(raw()) })), stream('data: [DONE]\n\n'), Response.json(complete(raw()))]) {
-    const f = fixture({ response }); await assert.rejects(recognizeWithPlan(f.input, f.options), error => ['PLAN_INCOMPLETE', 'PLAN_STREAM'].includes(error.code));
+    const f = fixture({ response }); await assert.rejects(recognizeWithPlan(f.input, f.options), error => ['PLAN_INCOMPLETE', 'PLAN_STREAM_TYPE'].includes(error.code));
   }
 });
 
@@ -64,6 +64,44 @@ test('streaming支持CRLF、多行data、中文UTF8跨字节分块', async () =>
   const encoded = new TextEncoder().encode(text);
   const response = new Response(new ReadableStream({ start(controller) { for (const byte of encoded) controller.enqueue(Uint8Array.of(byte)); controller.close(); } }), { headers: { 'Content-Type': 'text/event-stream; charset=utf-8' } });
   const f = fixture({ response }); assert.deepEqual(await recognizeWithPlan(f.input, f.options), raw());
+});
+
+test('支持message通用SSE封装与省略event，但特殊事件名不匹配仍拒绝', async () => {
+  for (const name of ['', 'message', 'response.completed']) {
+    const value = `${name ? `event: ${name}\n` : ''}data: ${JSON.stringify(complete(raw()))}\n\n`;
+    const f = fixture({ response: stream(value) }); assert.deepEqual(await recognizeWithPlan(f.input, f.options), raw());
+  }
+  const f = fixture({ response: stream(`event: response.created\ndata: ${JSON.stringify(complete(raw()))}\n\n`) });
+  await assert.rejects(recognizeWithPlan(f.input, f.options), check('PLAN_STREAM_EVENT', 502));
+  const tool = fixture({ response: stream('event: message\ndata: {"type":"response.function_call_arguments.delta","delta":"{}"}\n\n') });
+  await assert.rejects(recognizeWithPlan(tool.input, tool.options), check('PLAN_TOOL_CALL', 502));
+});
+
+test('三类流式失败只提供安全诊断元数据，不包含正文、令牌、图片或原始headers', async () => {
+  const cases = [
+    { response: new Response('PRIVATE_HTTP_BODY', { headers: { 'Content-Type': 'application/json; private=PRIVATE_CT', 'x-secret': 'PRIVATE_HEADER' } }), code: 'PLAN_STREAM_TYPE', expected: { stage: 'http', http_status: 200, content_type: 'json', data_length: 0, event_name: 'other', event_type: 'other' } },
+    { response: stream('event: message\ndata: PRIVATE_BAD_JSON\n\n'), code: 'PLAN_STREAM_JSON', expected: { stage: 'json', http_status: 200, content_type: 'event-stream', data_length: Buffer.byteLength('PRIVATE_BAD_JSON'), event_name: 'message', event_type: 'other' } },
+    { response: stream('event: response.created\ndata: {"type":"response.completed","private":"PRIVATE_EVENT_BODY"}\n\n'), code: 'PLAN_STREAM_EVENT', expected: { stage: 'event', http_status: 200, content_type: 'event-stream', data_length: Buffer.byteLength('{"type":"response.completed","private":"PRIVATE_EVENT_BODY"}'), event_name: 'response.created', event_type: 'response.completed' } },
+  ];
+  for (const sample of cases) {
+    const diagnostics = [], f = fixture({ response: sample.response });
+    await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic: value => diagnostics.push(value) }), check(sample.code, 502));
+    assert.deepEqual(diagnostics, [sample.expected]); assert.equal(JSON.stringify(diagnostics).includes('PRIVATE_'), false);
+    assert.equal(Object.isFrozen(diagnostics[0]), true);
+  }
+  for (const name of ['bad name PRIVATE_STATE', 'response.' + 'x'.repeat(101), 'PRIVATE_ACCESS_TOKEN']) {
+    const diagnostics = [], f = fixture({ response: stream(`event: ${name}\ndata: {"type":"bad name PRIVATE_TOKEN"}\n\n`) });
+    await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic: value => diagnostics.push(value) }), check('PLAN_STREAM_EVENT', 502));
+    assert.equal(diagnostics[0].event_name, 'other'); assert.equal(diagnostics[0].event_type, 'other'); assert.equal(JSON.stringify(diagnostics).includes('PRIVATE_'), false);
+  }
+});
+
+test('诊断回调默认静默，同步抛错和异步拒绝都不改变原业务错误', async () => {
+  for (const onDiagnostic of [undefined, () => { throw new Error('PRIVATE_DIAGNOSTIC'); }, async () => { throw new Error('PRIVATE_DIAGNOSTIC'); }]) {
+    const f = fixture({ response: stream('event: message\ndata: invalid\n\n') });
+    await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic }), check('PLAN_STREAM_JSON', 502));
+  }
+  const diagnostics = [], f = fixture(); assert.deepEqual(await recognizeWithPlan(f.input, { ...f.options, onDiagnostic: value => diagnostics.push(value) }), raw()); assert.deepEqual(diagnostics, []);
 });
 
 test('拒绝任何工具输出，包括terminal output伪装的函数或shell调用', async () => {
