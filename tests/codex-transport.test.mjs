@@ -104,6 +104,42 @@ test('诊断回调默认静默，同步抛错和异步拒绝都不改变原业�
   const diagnostics = [], f = fixture(); assert.deepEqual(await recognizeWithPlan(f.input, { ...f.options, onDiagnostic: value => diagnostics.push(value) }), raw()); assert.deepEqual(diagnostics, []);
 });
 
+test('缺Content-Type但有body时只按SSE解析；合法完整结果成功而JSON、文本和截断继续拒绝', async () => {
+  const withoutHeader = text => new Response(new TextEncoder().encode(text));
+  const successDiagnostics = [], f = fixture({ response: withoutHeader(event(complete(raw()))) });
+  assert.deepEqual(await recognizeWithPlan(f.input, { ...f.options, onDiagnostic: value => successDiagnostics.push(value) }), raw()); assert.deepEqual(successDiagnostics, []);
+  const samples = [
+    { text: JSON.stringify(complete(raw())), count: 0 },
+    { text: 'PRIVATE_PARTIAL_TEXT', count: 0 },
+    { text: event(complete(raw())).trimEnd(), count: 0 },
+    { text: event({ type: 'response.output_text.delta', delta: 'PRIVATE_PARTIAL_JSON' }), count: 1 },
+  ];
+  for (const sample of samples) {
+    const diagnostics = [], g = fixture({ response: withoutHeader(sample.text) });
+    await assert.rejects(recognizeWithPlan(g.input, { ...g.options, onDiagnostic: value => diagnostics.push(value) }), check('PLAN_INCOMPLETE', 502));
+    assert.deepEqual(diagnostics, [{ stage: 'eof', http_status: 200, content_type: 'missing', data_length: Buffer.byteLength(sample.text), event_name: 'other', event_type: 'other', parsed_events: sample.count }]);
+    assert.equal(JSON.stringify(diagnostics).includes('PRIVATE_'), false);
+  }
+  const missingBody = fixture({ response: new Response(null) });
+  await assert.rejects(recognizeWithPlan(missingBody.input, missingBody.options), check('PLAN_STREAM_TYPE', 502));
+  const explicit = fixture({ response: new Response(event(complete(raw())), { headers: { 'Content-Type': 'application/json' } }) });
+  await assert.rejects(recognizeWithPlan(explicit.input, explicit.options), check('PLAN_STREAM_TYPE', 502));
+});
+
+test('缺Content-Type仍拒绝工具、拒绝响应和schema以外字段', async () => {
+  const refusal = complete(raw()); refusal.response.output[0].content = [{ type: 'refusal', refusal: 'PRIVATE_REFUSAL' }];
+  const values = [
+    [{ type: 'response.output_item.added', item: { type: 'function_call', name: 'shell' } }, 'PLAN_TOOL_CALL'],
+    [refusal, 'PLAN_REFUSAL'],
+    [complete({ ...raw(), changes: [] }), 'PLAN_SCHEMA'],
+    [{ type: 'response.incomplete' }, 'PLAN_INCOMPLETE'],
+  ];
+  for (const [value, code] of values) {
+    const f = fixture({ response: new Response(new TextEncoder().encode(event(value))) });
+    await assert.rejects(recognizeWithPlan(f.input, f.options), check(code, 502));
+  }
+});
+
 test('拒绝任何工具输出，包括terminal output伪装的函数或shell调用', async () => {
   const samples = [{ type: 'response.function_call_arguments.delta', delta: '{}' }, { type: 'response.output_item.added', item: { type: 'function_call', name: 'shell', arguments: '{}' } }, { type: 'response.output_item.added', item: { type: 'shell_call' } }, { type: 'response.completed', response: { status: 'completed', output: [{ type: 'mcp_call', server_label: 'private' }] } }];
   for (const value of samples) { const f = fixture({ response: stream(value) }); await assert.rejects(recognizeWithPlan(f.input, f.options), check('PLAN_TOOL_CALL', 502)); }

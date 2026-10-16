@@ -26,7 +26,7 @@ function fakeIdentity() {
     status: () => ({ connected, plan_authorized: plan, account_label: connected ? '本人测试账号' : null,
       account_key: connected ? account : null, access_token: 'DO-NOT-EXPOSE-MEMORY-TOKEN' }),
     start: () => 'https://auth.openai.com/oauth/authorize?state=offline-public-state',
-    async callback(params) { this.callbackCalls.push(params); if (params.has('error')) throw Error('DO-NOT-ECHO-CALLBACK-SECRET'); },
+    async callback(params) { this.callbackCalls.push(params); if (params.has('error')) throw Error('DO-NOT-ECHO-CALLBACK-SECRET'); connected = true; },
     async models() { this.modelCalls++; return [{ slug: model, display_name: '离线测试模型' }]; },
     async accessToken() { return 'DO-NOT-EXPOSE-MEMORY-TOKEN'; },
     async logout() { this.logoutCalls++; connected = false; },
@@ -131,11 +131,20 @@ test('本机portal不可被站点JS读取；OAuth表单要求本机Origin和CSRF
   assert.equal((await submit('incorrect', env.base)).status, 403);
   const login = await submit(portal.nonce, env.base); assert.equal(login.status, 303);
   assert.equal(new URL(login.headers.get('location')).origin, 'https://auth.openai.com');
+  env.identity.setConnected(false);
   const callback = await env.request('/auth/callback?code=HIDDEN-CODE&state=HIDDEN-STATE', { auth: false, origin: null });
-  assert.equal(callback.status, 200); assert.equal(callback.headers.get('referrer-policy'), 'no-referrer'); assert.doesNotMatch(await callback.text(), /HIDDEN-CODE|HIDDEN-STATE/);
-  const failed = await env.request('/auth/callback?error=provider_error&state=HIDDEN-STATE', { auth: false, origin: null });
-  assert.equal(failed.status, 400); assert.equal(failed.headers.get('referrer-policy'), 'no-referrer'); assert.doesNotMatch(await failed.text(), /SECRET|HIDDEN-STATE|provider_error/);
+  assert.equal(callback.status, 303); assert.equal(callback.headers.get('location'), '/');
+  assert.equal(new URL(callback.headers.get('location'), env.base).search, '');
+  assert.equal(callback.headers.get('referrer-policy'), 'no-referrer'); assert.equal(callback.headers.get('cache-control'), 'no-store'); assert.equal(await callback.text(), '');
+  const successfulHome = await env.portal(); assert.match(successfulHome.html, /官方登录已完成/); assert.doesNotMatch(successfulHome.html, /HIDDEN-CODE|HIDDEN-STATE/);
+  assert.equal(successfulHome.response.headers.get('referrer-policy'), 'same-origin');
   await env.pair();
+  const connectedStatus = await env.request('/status'); assert.equal(connectedStatus.status, 200); assert.equal((await connectedStatus.json()).connected, true);
+  const failed = await env.request('/auth/callback?error=provider_error&state=HIDDEN-STATE', { auth: false, origin: null });
+  assert.equal(failed.status, 303); assert.equal(failed.headers.get('location'), '/');
+  assert.equal(new URL(failed.headers.get('location'), env.base).search, '');
+  assert.equal(failed.headers.get('referrer-policy'), 'no-referrer'); assert.equal(failed.headers.get('cache-control'), 'no-store'); assert.equal(await failed.text(), '');
+  const failedHome = await env.portal(); assert.match(failedHome.html, /最近一次登录未完成/); assert.doesNotMatch(failedHome.html, /SECRET|HIDDEN-STATE|provider_error/);
   const latest = await env.portal();
   assert.equal((await env.request('/portal/logout', { method: 'POST', origin: env.base, headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ csrf: latest.nonce }) })).status, 200);
   assert.equal(env.identity.logoutCalls, 1); assert.equal((await (await env.request('/status')).json()).connected, false);

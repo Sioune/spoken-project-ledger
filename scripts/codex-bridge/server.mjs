@@ -110,7 +110,7 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
   if (!Number.isFinite(recognitionTimeoutMs) || recognitionTimeoutMs < 1 || recognitionTimeoutMs > 120_000) throw new Error('A bounded recognition deadline is required');
   const store = providedStore || new BridgeStore({ stateDir, now });
   const pairTokens = new Map();
-  let pair, portalNonce = randomToken(), busy = false, activeAbort;
+  let pair, portalNonce = randomToken(), busy = false, activeAbort, lastLoginResult = null;
   const timestamp = () => new Date(now()).getTime();
   const rotatePair = () => {
     let code;
@@ -207,7 +207,9 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
       if (pair.expires <= timestamp() || pair.attempts >= 5) rotatePair();
       portalNonce = randomToken();
       const status = publicIdentity(identity);
-      html(response, 200, `<h1>项目簿 · 本机 Codex 桥</h1><p>${status.connected ? `已连接：${escapeHtml(status.account_label || '本人账号')}` : '尚未连接 Codex，请通过官方登录连接。'}</p><section aria-label="连接前须知"><h2>连接前须知</h2><p>这是独立的官方授权，不读取已有 Codex 凭据。识别使用本人所选 ChatGPT 计划及其可用额度，不额外开启 API 付费，也不承诺免费；可用性和用量以本人账号与工作区政策为准。</p><p>仅在本人明确点击识别时，才将本次图片、说明和项目名称发送至 OpenAI。请求设置 store:false，但这不等于零保留；服务端保留仍按账号、工作区和服务政策处理。连接和配对本身不会发送图片。</p><p>原图不落盘；本机结构化结果保存 7 天，在访问或启动时清理。请求编号、hash、计数及公共注册信息长期保留用于防重，不能理解为所有本机数据都在 7 天后删除。</p><p><a href="https://openai.com/policies/sign-in-with-chatgpt-terms/" rel="noreferrer">Sign in with ChatGPT 条款</a> · <a href="https://openai.com/policies/privacy-policy/" rel="noreferrer">隐私政策</a></p></section><form method="post" action="/portal/connect"><input type="hidden" name="csrf" value="${portalNonce}"><button>通过官方页面连接 Codex</button></form><h2>网页配对码</h2><output id="pair-code">${pair.code}</output><p>5 分钟内有效，仅使用一次；最多尝试 5 次。</p><p>仅允许原项目簿网站配对。每台本机每天最多 10 次，失败和超时也计入。</p><p><small>本机桥必须保持运行。配对与登录令牌仅保存在进程内存；重启后需要重新登录和配对。它不会预约、发消息或写入项目簿。</small></p><form method="post" action="/portal/logout"><input type="hidden" name="csrf" value="${portalNonce}"><button>断开 Codex 账号</button></form>`);
+      const loginNotice = lastLoginResult === 'success' ? '<p role="status">官方登录已完成，可返回项目簿核对连接状态。</p>'
+        : lastLoginResult === 'failed' ? '<p role="status">最近一次登录未完成，可重新发起官方登录。</p>' : '';
+      html(response, 200, `<h1>项目簿 · 本机 Codex 桥</h1>${loginNotice}<p>${status.connected ? `已连接：${escapeHtml(status.account_label || '本人账号')}` : '尚未连接 Codex，请通过官方登录连接。'}</p><section aria-label="连接前须知"><h2>连接前须知</h2><p>这是独立的官方授权，不读取已有 Codex 凭据。识别使用本人所选 ChatGPT 计划及其可用额度，不额外开启 API 付费，也不承诺免费；可用性和用量以本人账号与工作区政策为准。</p><p>仅在本人明确点击识别时，才将本次图片、说明和项目名称发送至 OpenAI。请求设置 store:false，但这不等于零保留；服务端保留仍按账号、工作区和服务政策处理。连接和配对本身不会发送图片。</p><p>原图不落盘；本机结构化结果保存 7 天，在访问或启动时清理。请求编号、hash、计数及公共注册信息长期保留用于防重，不能理解为所有本机数据都在 7 天后删除。</p><p><a href="https://openai.com/policies/sign-in-with-chatgpt-terms/" rel="noreferrer">Sign in with ChatGPT 条款</a> · <a href="https://openai.com/policies/privacy-policy/" rel="noreferrer">隐私政策</a></p></section><form method="post" action="/portal/connect"><input type="hidden" name="csrf" value="${portalNonce}"><button>通过官方页面连接 Codex</button></form><h2>网页配对码</h2><output id="pair-code">${pair.code}</output><p>5 分钟内有效，仅使用一次；最多尝试 5 次。</p><p>仅允许原项目簿网站配对。每台本机每天最多 10 次，失败和超时也计入。</p><p><small>本机桥必须保持运行。配对与登录令牌仅保存在进程内存；重启后需要重新登录和配对。它不会预约、发消息或写入项目簿。</small></p><form method="post" action="/portal/logout"><input type="hidden" name="csrf" value="${portalNonce}"><button>断开 Codex 账号</button></form>`);
       return;
     }
     if (request.method === 'POST' && url.pathname === '/portal/connect') {
@@ -225,10 +227,11 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
     if (request.method === 'GET' && url.pathname === '/auth/callback') {
       try {
         await identity.callback(url.searchParams);
-        html(response, 200, '<h1>官方登录已完成</h1><p>可返回项目簿核对连接状态。</p><p><a href="/">返回本机桥</a></p>');
+        lastLoginResult = 'success';
       } catch {
-        html(response, 400, '<h1>登录未完成</h1><p>请返回本机桥重新发起官方登录；未显示或保存回调凭据。</p><p><a href="/">返回本机桥</a></p>');
+        lastLoginResult = 'failed';
       }
+      response.writeHead(303, { Location: '/' }); response.end();
       return;
     }
     if (request.method === 'POST' && url.pathname === '/pair') {

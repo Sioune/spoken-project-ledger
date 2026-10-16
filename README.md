@@ -125,3 +125,5 @@ OAuth PKCE、state、nonce、签名身份、有效期及账号一致性均在本
 离线验证命令：`node --test tests/codex-identity.test.mjs tests/codex-transport.test.mjs tests/codex-bridge.test.mjs tests/codex-result.test.mjs`；网页模拟：`LEDGER_QA_BASE` 指向本机预览后运行 `node tests/codex-bridge-ui-proof.mjs`。模拟成功不能替代本人正式授权后，从原 HTTPS 网页到本机及真实截图的验收。
 
 2026-10-17 实测记录：用户已完成官方授权，原站核验计划权限和本人模型目录成功。第一次使用中性说明发送真实晚宴原图，但返回流被 `PLAN_STREAM` 拒绝，候选未采用，生产未保存。随后补齐通用 `event: message` 包装兼容，仍要求完整 `response.completed` 与严格字段，并将流类型、JSON和事件结构错误分开。55项相关测试通过；诊断日志仅含受控阶段、HTTP状态、内容类型类别、长度及白名单事件类型，不记原文或秘密。加载修复重启后的同应用返回登录，在OpenAI官方页面出现 `Operation timed out` / “无法检查权限是否可用”，没有回调；真实识图仍待验证，不能把此次兼容修复说成已通过真实截图验收。保留原注册信息、图片草稿和失败编号，不换应用或计费路径。
+
+随后用户恢复会话，失败原号重试实际返回 `REQUEST_FAILED`，整机次数保持1。第二次明确新请求定位到响应HTTP200且有body，但缺少Content-Type，因头检查而在读body前拒绝。现已允许缺失该头时走同一严格SSE解析；显式错误类型、普通JSON、部分文本、截断及非完整终止仍拒绝。相关57项测试通过。OAuth成功/失败回调均303到干净首页，避免在凭据参数地址渲染结果；失败界面也会清除陈旧的“正在识别”提示，28项Codex网页模拟检查通过。第三次真实识别尚待更新后会话恢复；现有2次失败记录及计数保留，生产事项未更改。

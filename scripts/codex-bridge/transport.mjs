@@ -80,19 +80,21 @@ export async function recognizeWithPlan({ identity, bytes, mime_type, note = '',
       const response = await fetchImpl(ENDPOINT, { method: 'POST', redirect: 'error', signal: controller.signal, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify({ model, instructions: recognitionInstructions, input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ note, project_names: projects.map(project => project.name) }) }, { type: 'input_image', image_url: `data:${mime_type};base64,${Buffer.from(bytes).toString('base64')}`, detail: 'high' }] }], tools: [], text: { format: { type: 'json_schema', name: 'project_ledger_image_intake', strict: true, schema: recognitionSchema } }, store: false, stream: true }) });
       if (!response.ok) { try { await response.body?.cancel(); } catch { /* Do not read sensitive provider diagnostics. */ } throw providerError(response.status); }
       const contentType = contentTypeClass(response.headers.get('content-type'));
-      function diagnostic(stage, dataLength = 0, eventName, eventType) {
+      function diagnostic(stage, dataLength = 0, eventName, eventType, parsedEvents) {
         if (typeof onDiagnostic !== 'function') return;
         const metadata = Object.freeze({ stage, http_status: response.status, content_type: contentType,
-          data_length: dataLength, event_name: diagnosticEvent(eventName), event_type: diagnosticEvent(eventType) });
+          data_length: dataLength, event_name: diagnosticEvent(eventName), event_type: diagnosticEvent(eventType),
+          ...(stage === 'eof' ? { parsed_events: parsedEvents } : {}) });
         // Logging is opt-in. A diagnostic consumer cannot change recognition behavior.
         try { void Promise.resolve(onDiagnostic(metadata)).catch(() => {}); } catch { /* No raw errors are logged. */ }
       }
-      if (!response.body || contentType !== 'event-stream') {
+      // The plan route can omit Content-Type; its body must still pass every SSE check.
+      if (!response.body || !['event-stream', 'missing'].includes(contentType)) {
         diagnostic('http');
         throw fail(502, 'PLAN_STREAM_TYPE', '识图服务未返回可读取的SSE流式响应，原图草稿仍保留。');
       }
       if (Number(response.headers.get('content-length')) > MAXIMUM_STREAM) throw fail(502, 'PLAN_RESPONSE_SIZE', '识图响应过大，已停止处理。');
-      reader = response.body.getReader(); const decoder = new TextDecoder('utf-8', { fatal: true }); let buffer = '', dataLines = [], eventName = '', size = 0;
+      reader = response.body.getReader(); const decoder = new TextDecoder('utf-8', { fatal: true }); let buffer = '', dataLines = [], eventName = '', size = 0, parsedEvents = 0;
       function dispatch() {
         if (!dataLines.length) { eventName = ''; return null; }
         const data = dataLines.join('\n'); dataLines = []; const name = eventName; eventName = '';
@@ -106,6 +108,7 @@ export async function recognizeWithPlan({ identity, bytes, mime_type, note = '',
           diagnostic('event', Buffer.byteLength(data), name, object(event) ? event.type : undefined);
           throw fail(502, 'PLAN_STREAM_EVENT', '识图SSE事件结构或事件名称不匹配，原图草稿仍保留。');
         }
+        parsedEvents++;
         if (toolType(event.type) || event.type.includes('refusal')) throw fail(502, 'PLAN_TOOL_CALL', '识图返回了工具请求或拒绝响应，已停止处理。');
         if (event.item !== undefined) inspectItem(event.item);
         if (event.part !== undefined && (!object(event.part) || !['output_text', 'reasoning_text', 'summary_text'].includes(event.part.type))) throw fail(502, 'PLAN_REFUSAL', 'ChatGPT没有提供可用识图内容。');
@@ -135,6 +138,7 @@ export async function recognizeWithPlan({ identity, bytes, mime_type, note = '',
       }
       decoder.decode();
       // An unterminated event is a truncated stream, even if its text resembles JSON.
+      diagnostic('eof', size, undefined, undefined, parsedEvents);
       throw fail(502, 'PLAN_INCOMPLETE', '识图连接中断或缺少完成确认，部分结果不会填入草稿。');
     })()]);
   } catch (error) {

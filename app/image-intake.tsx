@@ -237,7 +237,7 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
       setDraft(current => ({ ...current, fields: preview.fields, preview, savedAt: new Date().toISOString() })); setPreviewPhase("done");
       setMessage("Codex识别候选已返回核对预览，尚未保存。请修订字段并明确选择操作；已有事项不会重复新增。");
     } catch (cause) {
-      if (epoch === accessEpoch.current) { setRecognition("error"); setPreviewPhase("error"); reportError(cause, "本机识图或候选核对未完成，图片与原编号仍保留"); }
+      if (epoch === accessEpoch.current) { setRecognition("error"); setPreviewPhase("error"); setMessage(""); reportError(cause, "本机识图或候选核对未完成，图片与原编号仍保留"); }
       if (cause === bridgeFailure) throw cause;
     } finally { setConsent(false); }
   }

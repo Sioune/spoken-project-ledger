@@ -133,7 +133,8 @@ try {
     control.models = [{ slug: 'fixture-other', display_name: 'Fixture Other' }]; await page.getByRole('button', { name: '加载可用模型', exact: true }).click(); assert.equal(await page.getByLabel('Codex识图模型', { exact: true }).inputValue(), '');
     await page.getByLabel('Codex识图模型', { exact: true }).selectOption('fixture-other'); await consent(page); control.models.push({ slug: 'gpt-6.1-sol', display_name: 'GPT 6.1 Sol' }); await page.getByRole('button', { name: '加载可用模型', exact: true }).click(); await consent(page); await page.getByLabel('Codex识图模型', { exact: true }).selectOption('gpt-6.1-sol'); assert.equal(await page.getByRole('checkbox', { name: /我同意本图原图/ }).isChecked(), false);
     assert.equal(control.recognitions.length, 0); control.recognitionMode = { status: 504, error: 'PLAN_TIMEOUT' }; await consent(page); await page.getByRole('button', { name: '用Codex识别并预览', exact: true }).click(); await page.getByText(/识别等待超时.*PLAN_TIMEOUT/).waitFor(); assert.equal((await page.locator('body').innerText()).includes(fixtureToken), false); await stable(page); noCredentials(await draft(page, control.scope));
-    await screenshot(page, 'explicit-catalog-selection-390'); checks.push({ emptyCatalogPreservesManualFields: true, unavailablePreferredModelDoesNotFallback: true, alternativeModelRequiresExplicitSelection: true, modelChangeResetsPlanConsent: true, safeSpecificTimeoutWithoutProviderMessage: true });
+    assert.equal(await page.getByText('正在通过本人本机授权识别原图；尚未保存事项。', { exact: true }).count(), 0);
+    await screenshot(page, 'explicit-catalog-selection-390'); checks.push({ emptyCatalogPreservesManualFields: true, unavailablePreferredModelDoesNotFallback: true, alternativeModelRequiresExplicitSelection: true, modelChangeResetsPlanConsent: true, safeSpecificTimeoutWithoutProviderMessage: true, failureDoesNotKeepRunningMessage: true });
   } finally { await catalog.context.close(); }
 
   const mismatch = await setup(1440);
