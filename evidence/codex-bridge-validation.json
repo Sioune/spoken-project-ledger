@@ -1,24 +1,69 @@
 {
   "date": "2026-10-17",
   "original_site_preserved": true,
-  "unit_tests": {"existing_plus_candidate_boundary":112,"local_bridge_identity_transport":52,"passed":164},
-  "browser_mock_assertions": {"codex_bridge":28,"existing_image_intake":40},
+  "architecture": "StarForge-style official Codex CLI native ChatGPT login reuse",
+  "cli_version": "0.153.2",
+  "independent_oauth_in_active_path": false,
+  "credentials_read_copied_or_persisted": false,
+  "paid_api_enabled": false,
+  "local_pairing": "Ephemeral web-to-loopback pairing, separate from CLI account authorization",
+  "native_identity": "Verified ChatGPT account and real image model catalog using account/read and model/list; no thread/turn/login",
+  "real_image_test": {
+    "verified": true,
+    "model": "gpt-6-astra",
+    "bytes": 712812,
+    "sha256": "35f3ebbec8d050df978ce668f845c44eeedf4cbfb5ebf83d806e93a1ac2840b6",
+    "neutral_note_did_not_supply_expected_fields": true,
+    "classification": "reserved_event",
+    "status": "todo",
+    "event_status": "reserved",
+    "date": "2026-10-17",
+    "time": "17:00",
+    "location": "南里山房·宴山海（太阳宫店）山海包厢",
+    "project_name": null,
+    "project_not_guessed": true,
+    "image_evidence_returned": true
+  },
+  "duplicate_preview": {
+    "matched_existing_item": "t-dinner-20261017-nanli",
+    "action": "inspect",
+    "business_changes": 0,
+    "save_disabled": true,
+    "original_image_not_saved_to_production": true
+  },
+  "same_request_web_retry": {
+    "passed": true,
+    "total_local_attempts_before": 6,
+    "total_local_attempts_after": 6,
+    "successful_requests": 1
+  },
+  "production_state": {
+    "revision": 23,
+    "projects": 8,
+    "items": 24,
+    "documents": 3,
+    "full_readback_equal_to_baseline": true,
+    "business_writes": 0
+  },
+  "historical_attempts": {
+    "independent_oauth_failed": 3,
+    "native_notification_misclassification_failed": 2,
+    "native_success": 1,
+    "counts_not_reset": true
+  },
+  "native_transport": "Unique final JSON, turn.completed, exit0, strict schema; nonfatal official ErrorItem notification excluded from content; tools/fatal/unknown/incomplete rejected",
+  "concurrency": "Timeout responds promptly; lock held until original recognizer cleanup settles; late success/rejection cannot overwrite failed request",
+  "privacy": "Original photo only in isolated local temporary task; cleanup after completion; no raw errors/tokens in logs; structured result7 days, request/hash/quota tombstones long term",
+  "browser_mock_assertions": {
+    "codex_bridge": 33,
+    "existing_image_intake": 40
+  },
+  "unit_tests": {
+    "passed": 211,
+    "files": 14
+  },
   "typescript_no_emit": "passed",
   "production_build": "passed",
-  "oauth_and_inference_in_tests": "injected offline responses only",
-  "actual_codex_inference_verified": false,
-  "actual_oauth_granted": true,
-  "first_real_attempt": "Original image sent with neutral note using catalog gpt-6.1-sol; rejected with PLAN_STREAM before any candidate adoption or business save",
-  "second_real_attempt": "After human restored the same OAuth session, HTTP 200 with response body but missing Content-Type was rejected before reading. Safe diagnostic stage=http, content_type=missing. No candidate or business write.",
-  "failed_original_retry": "REQUEST_FAILED, no additional inference and local daily count unchanged",
-  "stream_compatibility_fix": "Generic message framing and absent Content-Type accepted only through strict SSE parsing; raw JSON/partial text still rejected; 57 focused tests pass",
-  "callback_url_cleanup": "Success and failure redirect to clean root with no-referrer; no callback query rendered; only safe enum notice kept in memory",
-  "failed_ui_state": "Failure clears stale running message; Codex mock fixture 28 assertions passes",
-  "returning_oauth_state": "After loading the repair, official browser reauthorization timed out and permission availability check failed before callback. Original issued registration and host retained.",
-  "paid_api_enabled": false,
-  "production_test_writes": 0,
-  "real_https_to_loopback_pair_and_status": "passed in original authenticated site, no image sent and quota zero",
-  "official_oauth_portal_navigation": "passed in Chrome after home-only same-origin referrer policy fix; consent handed to user",
-  "acceptance_boundary": "First official authorization was verified, but real image recognition has not passed. Await recovery of official returning authorization, then explicit new recognition; never replay the failed original request as a new billable call.",
-  "data_policy": "No original photo or credentials in source. Local structured results expire after seven days on access; request tombstones and quota counters persist. Browser drafts remain local until explicit save."
+  "production_note": "Publication and post-deployment policy/MCP/data comparison recorded separately in ignored acceptance.json; no new Site or migration",
+  "dot": "Original7-tool MCP contract retained; historical operation receipt independently readable; no production test write"
 }

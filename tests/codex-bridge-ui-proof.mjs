@@ -7,7 +7,7 @@ import { chromium } from '../.sites-runtime/browser-qa/node_modules/playwright-c
 import { base } from './local-base.mjs';
 
 // Real local frontend and in-memory interpretation/model. All loopback bridge,
-// authorization, AI, parser and business routes are intercepted before dispatch.
+// CLI checks, AI, parser and business routes are intercepted before dispatch.
 const compile = file => ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText;
 const modelURL = `data:text/javascript;base64,${Buffer.from(compile('lib/model.ts')).toString('base64')}`;
 const { applyChanges } = await import(modelURL);
@@ -39,7 +39,7 @@ async function setup(width) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN', timezoneId: 'Asia/Shanghai', serviceWorkers: 'block' });
   await context.addInitScript(() => { const original = crypto.subtle.digest.bind(crypto.subtle); crypto.subtle.digest = async (...args) => { if (window.__holdDigest) { window.__digestHeld = true; await new Promise(resolve => { window.__releaseDigest = resolve; }); const result = await original(...args); window.__digestFinished = true; return result; } return original(...args); }; });
   const page = await context.newPage(); page.setDefaultTimeout(10000); page.on('pageerror', error => pageErrors.push({ width, message: error.message }));
-  const control = { state: initialState(), scope: `codex-fixture-owner-${width}`, bridgeCalls: [], recognitions: [], parserCalls: [], previews: [], commits: [], receipts: new Map(), denyPair: false, recognitionMode: 'success', models: [{ slug: 'gpt-6.1-sol', display_name: 'GPT 6.1 Sol' }, { slug: 'fixture-other', display_name: 'Fixture Other' }], receiptUnavailable: false };
+  const control = { state: initialState(), scope: `codex-fixture-owner-${width}`, bridgeCalls: [], recognitions: [], parserCalls: [], previews: [], commits: [], receipts: new Map(), denyPair: false, connected: true, planAuthorized: true, recognitionMode: 'success', models: [{ slug: 'gpt-6.1-sol', display_name: 'GPT 6.1 Sol' }, { slug: 'fixture-other', display_name: 'Fixture Other' }], receiptUnavailable: false };
   await context.route('**/*', async route => {
     const request = route.request(), url = new URL(request.url()), method = request.method();
     const cors = { 'Access-Control-Allow-Origin': base, 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Authorization, Content-Type', 'Access-Control-Allow-Private-Network': 'true' };
@@ -49,7 +49,7 @@ async function setup(width) {
       control.bridgeCalls.push({ path: url.pathname, method });
       if (url.pathname === '/pair') { if (control.denyPair) return route.abort('blockedbyclient'); const body = request.postDataJSON(); assert.equal(body.code, fixtureCode); assert.equal(body.scope, control.scope); return json({ token: fixtureToken, bridge_id: 'fixture-bridge' }); }
       assert.equal(request.headers().authorization, `Bearer ${fixtureToken}`);
-      if (url.pathname === '/status') return json({ connected: true, plan_authorized: true, account_label: '本人虚构计划账号', account_key: 'fixture-account', bridge_id: 'fixture-bridge', quota: { day: '2026-10-17', used: 1, max: 10 } });
+      if (url.pathname === '/status') return json({ connected: control.connected, plan_authorized: control.planAuthorized, account_label: control.connected ? '本人虚构CLI账号' : null, account_key: control.connected ? 'fixture-account' : null, auth_mode: 'codex-cli', bridge_id: 'fixture-bridge', quota: { day: '2026-10-17', used: 1, max: 10 } });
       if (url.pathname === '/models') return json({ models: control.models });
       if (url.pathname === '/disconnect') return json({ disconnected: true });
       if (url.pathname === '/recognize') {
@@ -92,8 +92,8 @@ async function setup(width) {
   await page.goto(`${base}/?view=today`, { waitUntil: 'networkidle' }); await page.getByRole('button', { name: '选择图片', exact: true }).waitFor();
   return { context, page, control };
 }
-async function pair(page) { await page.getByLabel('本机连接码', { exact: true }).fill(fixtureCode); await page.getByRole('button', { name: '连接本机桥接', exact: true }).click(); await page.getByRole('button', { name: '刷新本机授权状态', exact: true }).waitFor(); }
-async function authorize(page) { await pair(page); await page.getByRole('button', { name: '刷新本机授权状态', exact: true }).click(); await page.getByText('本人虚构计划账号', { exact: true }).waitFor(); await page.getByRole('button', { name: '加载可用模型', exact: true }).click(); }
+async function pair(page) { await page.getByLabel('本机连接码', { exact: true }).fill(fixtureCode); await page.getByRole('button', { name: '连接本机桥接', exact: true }).click(); await page.getByRole('button', { name: '检查本机 Codex 登录', exact: true }).waitFor(); }
+async function authorize(page) { await pair(page); await page.getByRole('button', { name: '检查本机 Codex 登录', exact: true }).click(); await page.getByText('本人虚构CLI账号', { exact: true }).waitFor(); await page.getByText('Codex CLI 已登录', { exact: true }).waitFor(); await page.getByRole('button', { name: '加载可用模型', exact: true }).click(); }
 async function consent(page) { await page.getByRole('checkbox', { name: /我同意本图原图/ }).check(); }
 async function screenshot(page, name) { const file = `${name}.png`; await page.locator('.codex-bridge-heading h4').click(); await page.locator('.codex-bridge-panel').screenshot({ path: path.join(out, file) }); screenshots.push(file); }
 function noCredentials(stored) { const serialized = JSON.stringify(stored); assert.equal(serialized.includes(fixtureToken), false); assert.equal(serialized.includes(fixtureCode), false); }
@@ -103,8 +103,9 @@ try {
   const main = await setup(320);
   try {
     const { page, control } = main;
-    assert.equal(control.bridgeCalls.length, 0); const link = page.getByRole('link', { name: '打开本机授权与连接码页面' }); assert.equal(await link.getAttribute('href'), bridge + '/'); assert.equal(await link.getAttribute('target'), '_blank'); assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
-    await page.getByText('原图、草稿和识别结果如何保留', { exact: true }).click(); await page.getByText(/结构化识别结果在本机缓存七天/).waitFor(); assert.ok((await page.locator('.codex-retention').innerText()).includes('store:false')); await page.getByText('原图、草稿和识别结果如何保留', { exact: true }).click();
+    assert.equal(control.bridgeCalls.length, 0); await page.getByRole('region', { name: '本机 Codex 识图', exact: true }).waitFor(); const link = page.getByRole('link', { name: '打开本机连接与检查页面' }); assert.equal(await link.getAttribute('href'), bridge + '/'); assert.equal(await link.getAttribute('target'), '_blank'); assert.equal(await link.getAttribute('rel'), 'noopener noreferrer');
+    assert.equal(/OAuth|官方登录|官方授权|ChatGPT 计划已授权/.test(await page.locator('.codex-bridge-panel').innerText()), false);
+    await page.getByText('原图、草稿和识别结果如何保留', { exact: true }).click(); await page.getByText(/结构化识别结果在本机缓存七天/).waitFor(); assert.ok((await page.locator('.codex-retention').innerText()).includes('ephemeral')); assert.ok((await page.locator('.codex-retention').innerText()).includes('临时')); await page.getByText('原图、草稿和识别结果如何保留', { exact: true }).click();
     await selectImage(page); await page.getByLabel('图片补充说明', { exact: true }).fill('已有晚宴，不可重复新增。'); await stable(page); const original = await draft(page, control.scope);
     control.denyPair = true; await page.getByLabel('本机连接码', { exact: true }).fill(fixtureCode); await page.getByRole('button', { name: '连接本机桥接', exact: true }).click(); await page.getByText(/无法连接本机桥接/).waitFor(); await stable(page);
     const afterLNA = await draft(page, control.scope); assert.equal(afterLNA.imageHash, hash); assert.equal(afterLNA.data.recognitionRequestId, original.data.recognitionRequestId); assert.equal(afterLNA.data.note, original.data.note); noCredentials(afterLNA);
@@ -132,7 +133,7 @@ try {
     await authorize(page); await page.getByText(/当前授权未返回可用模型/).waitFor(); assert.equal(await page.getByLabel('事项标题', { exact: true }).inputValue(), '模型目录不可用也保留此人工字段'); assert.equal(await page.getByRole('button', { name: '用Codex识别并预览', exact: true }).isDisabled(), true);
     control.models = [{ slug: 'fixture-other', display_name: 'Fixture Other' }]; await page.getByRole('button', { name: '加载可用模型', exact: true }).click(); assert.equal(await page.getByLabel('Codex识图模型', { exact: true }).inputValue(), '');
     await page.getByLabel('Codex识图模型', { exact: true }).selectOption('fixture-other'); await consent(page); control.models.push({ slug: 'gpt-6.1-sol', display_name: 'GPT 6.1 Sol' }); await page.getByRole('button', { name: '加载可用模型', exact: true }).click(); await consent(page); await page.getByLabel('Codex识图模型', { exact: true }).selectOption('gpt-6.1-sol'); assert.equal(await page.getByRole('checkbox', { name: /我同意本图原图/ }).isChecked(), false);
-    assert.equal(control.recognitions.length, 0); control.recognitionMode = { status: 504, error: 'PLAN_TIMEOUT' }; await consent(page); await page.getByRole('button', { name: '用Codex识别并预览', exact: true }).click(); await page.getByText(/识别等待超时.*PLAN_TIMEOUT/).waitFor(); assert.equal((await page.locator('body').innerText()).includes(fixtureToken), false); await stable(page); noCredentials(await draft(page, control.scope));
+    assert.equal(control.recognitions.length, 0); control.recognitionMode = { status: 504, error: 'CODEX_CLI_TIMEOUT' }; await consent(page); await page.getByRole('button', { name: '用Codex识别并预览', exact: true }).click(); await page.getByText(/CODEX_CLI_TIMEOUT/).waitFor(); assert.equal((await page.locator('body').innerText()).includes(fixtureToken), false); await stable(page); noCredentials(await draft(page, control.scope));
     assert.equal(await page.getByText('正在通过本人本机授权识别原图；尚未保存事项。', { exact: true }).count(), 0);
     await screenshot(page, 'explicit-catalog-selection-390'); checks.push({ emptyCatalogPreservesManualFields: true, unavailablePreferredModelDoesNotFallback: true, alternativeModelRequiresExplicitSelection: true, modelChangeResetsPlanConsent: true, safeSpecificTimeoutWithoutProviderMessage: true, failureDoesNotKeepRunningMessage: true });
   } finally { await catalog.context.close(); }
@@ -154,6 +155,21 @@ try {
     await page.evaluate(() => { window.__releaseDigest(); }); await page.waitForFunction(() => window.__digestFinished === true);
     assert.equal(control.recognitions.length, 0); assert.equal(control.parserCalls.length, 0); assert.equal(control.commits.length, 0); checks.push({ unmountBeforeDigestCompletesNeverSendsOldImage: true });
   } finally { await race.context.close(); }
+
+  const native = await setup(390);
+  try {
+    const { page, control } = native; await selectImage(page); await page.getByLabel('图片补充说明', { exact: true }).fill('原生CLI未登录时仍保留原图和说明'); await page.getByRole('button', { name: '手动填写', exact: true }).click(); await page.getByLabel('事项标题', { exact: true }).fill('原生CLI状态失败的人工草稿'); await stable(page); const original = await draft(page, control.scope);
+    control.connected = false; control.planAuthorized = false; await pair(page); await page.getByRole('button', { name: '检查本机 Codex 登录', exact: true }).click(); await page.getByText('Codex CLI 尚未登录', { exact: true }).waitFor();
+    assert.equal(await page.getByRole('button', { name: '加载可用模型', exact: true }).isDisabled(), true); assert.equal(await page.getByRole('button', { name: '用Codex识别并预览', exact: true }).isDisabled(), true); assert.equal(await page.getByLabel('事项标题', { exact: true }).inputValue(), original.data.fields.title); assert.equal(/OAuth|官方登录|官方授权|ChatGPT 计划已授权/.test(await page.locator('.codex-bridge-panel').innerText()), false);
+    control.connected = true; control.planAuthorized = true; await page.getByRole('button', { name: '检查本机 Codex 登录', exact: true }).click(); await page.getByText('Codex CLI 已登录', { exact: true }).waitFor(); await page.getByRole('button', { name: '加载可用模型', exact: true }).click();
+    for (const code of ['CODEX_CLI_NOT_FOUND', 'CODEX_CLI_NOT_LOGGED_IN', 'CODEX_CLI_ACCOUNT', 'CODEX_NATIVE_EXIT', 'CODEX_NATIVE_SCHEMA', 'CODEX_NATIVE_TOOL']) {
+      // Simulate each native boundary without starting a CLI or a real bridge.
+      control.recognitionMode = { status: 502, error: code }; await consent(page); await page.getByRole('button', { name: '用Codex识别并预览', exact: true }).click(); await page.getByText(new RegExp(code)).waitFor(); await stable(page);
+      const retained = await draft(page, control.scope); assert.equal(retained.imageHash, hash); assert.equal(retained.data.recognitionRequestId, original.data.recognitionRequestId); assert.equal(retained.data.fields.title, original.data.fields.title); noCredentials(retained); assert.equal(control.commits.length, 0); assert.equal(control.parserCalls.length, 0); assert.equal(await page.getByText('正在通过本人本机授权识别原图；尚未保存事项。', { exact: true }).count(), 0);
+    }
+    assert.equal(control.bridgeCalls.some(call => ['/portal/connect', '/portal/logout', '/auth/callback'].includes(call.path)), false);
+    checks.push({ nativeCLIStatusUsesExistingLogin: true, noIndependentOAuthControls: true, nativeNotLoggedInBlocksRecognition: true, allNativeErrorsRetainOriginalDraftAndRequest: true, nativeErrorsNeverSaveOrParseResults: true });
+  } finally { await native.context.close(); }
 
   assert.deepEqual(pageErrors, []); assert.deepEqual(escaped, []);
   const report = { recorded_at: new Date().toISOString(), passed: true, checks, screenshots, pageErrors, escapedRequests: escaped, realProviderCalls: 0, realBridgeRequests: 0, productionRequests: 0 };

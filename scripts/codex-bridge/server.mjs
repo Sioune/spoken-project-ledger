@@ -155,7 +155,7 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
   }
   function requirePlan() {
     const status = publicIdentity(identity);
-    if (!status.connected) throw new BridgeError(401, 'CODEX_NOT_CONNECTED', '请在本机桥页面通过官方登录连接 Codex。');
+    if (!status.connected) throw new BridgeError(401, identity.kind === 'codex-cli' ? 'CODEX_CLI_NOT_LOGGED_IN' : 'CODEX_NOT_CONNECTED', '请先在本机 Codex CLI 完成登录，再检查本机状态。');
     if (!status.plan_authorized || !status.account_key) throw new BridgeError(403, 'PLAN_NOT_AUTHORIZED', '尚未取得 ChatGPT 套餐识别授权。');
     return status;
   }
@@ -206,7 +206,12 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
       store.expireResults();
       if (pair.expires <= timestamp() || pair.attempts >= 5) rotatePair();
       portalNonce = randomToken();
+      if (typeof identity.refresh === 'function') await identity.refresh();
       const status = publicIdentity(identity);
+      if (identity.kind === 'codex-cli') {
+        html(response, 200, `<h1>项目簿 · 本机 Codex 桥</h1><p>${status.connected ? `Codex CLI 已登录：${escapeHtml(status.account_label || '本人账号')}` : 'Codex CLI 尚未登录或暂不可读取。请在本机 Codex 完成登录，再刷新本页。'}</p><section aria-label="连接说明"><h2>复用本机 Codex 登录</h2><p>使用官方 Codex CLI 已有登录，由 CLI 管理与刷新登录状态。这里不另建网页授权，不读取或复制登录令牌，也不退出其他项目使用的 Codex 账号。服务重启不会清除 CLI 登录。</p><p>仅在点击识别时，将所选原图、说明和项目名称通过本机 Codex 发给 OpenAI，使用当前 ChatGPT 账号的可用额度，不开启单独付费 API，也不承诺免费。模型任务不能执行命令、调用插件、浏览网页或修改项目簿。</p><p>每张图使用独立临时任务。原图及结构定义临时写在本机隔离目录，任务结束后删除；CLI 使用 ephemeral 模式，不保存本次会话文件。服务端保留按当前账号和工作区政策处理，不承诺零保留。</p><p>网页草稿仍在本人浏览器；本机结构化结果缓存7天，请求编号、校验值和本机次数长期保留用于防重。失败和超时也计本机每日10次尝试，重启不会重置。</p><p><a href="https://openai.com/policies/privacy-policy/" rel="noreferrer">OpenAI 隐私政策</a></p></section><h2>网页配对码</h2><output id="pair-code">${pair.code}</output><p>5分钟内有效，仅使用一次；最多尝试5次。它只连接当前网页和本机服务，不是再次授权 Codex。网页刷新或服务重启后需重新配对。</p><p><small>本机服务须保持运行；手机不能连接本电脑的127.0.0.1。识别只产生待核对预览，不预约、不发消息、不设置提醒，也不自动保存。</small></p><form method="post" action="/portal/logout"><input type="hidden" name="csrf" value="${portalNonce}"><button>停用本机网页连接</button></form>`);
+        return;
+      }
       const loginNotice = lastLoginResult === 'success' ? '<p role="status">官方登录已完成，可返回项目簿核对连接状态。</p>'
         : lastLoginResult === 'failed' ? '<p role="status">最近一次登录未完成，可重新发起官方登录。</p>' : '';
       html(response, 200, `<h1>项目簿 · 本机 Codex 桥</h1>${loginNotice}<p>${status.connected ? `已连接：${escapeHtml(status.account_label || '本人账号')}` : '尚未连接 Codex，请通过官方登录连接。'}</p><section aria-label="连接前须知"><h2>连接前须知</h2><p>这是独立的官方授权，不读取已有 Codex 凭据。识别使用本人所选 ChatGPT 计划及其可用额度，不额外开启 API 付费，也不承诺免费；可用性和用量以本人账号与工作区政策为准。</p><p>仅在本人明确点击识别时，才将本次图片、说明和项目名称发送至 OpenAI。请求设置 store:false，但这不等于零保留；服务端保留仍按账号、工作区和服务政策处理。连接和配对本身不会发送图片。</p><p>原图不落盘；本机结构化结果保存 7 天，在访问或启动时清理。请求编号、hash、计数及公共注册信息长期保留用于防重，不能理解为所有本机数据都在 7 天后删除。</p><p><a href="https://openai.com/policies/sign-in-with-chatgpt-terms/" rel="noreferrer">Sign in with ChatGPT 条款</a> · <a href="https://openai.com/policies/privacy-policy/" rel="noreferrer">隐私政策</a></p></section><form method="post" action="/portal/connect"><input type="hidden" name="csrf" value="${portalNonce}"><button>通过官方页面连接 Codex</button></form><h2>网页配对码</h2><output id="pair-code">${pair.code}</output><p>5 分钟内有效，仅使用一次；最多尝试 5 次。</p><p>仅允许原项目簿网站配对。每台本机每天最多 10 次，失败和超时也计入。</p><p><small>本机桥必须保持运行。配对与登录令牌仅保存在进程内存；重启后需要重新登录和配对。它不会预约、发消息或写入项目簿。</small></p><form method="post" action="/portal/logout"><input type="hidden" name="csrf" value="${portalNonce}"><button>断开 Codex 账号</button></form>`);
@@ -214,6 +219,7 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
     }
     if (request.method === 'POST' && url.pathname === '/portal/connect') {
       await portalForm(request);
+      if (identity.kind === 'codex-cli') throw new BridgeError(410, 'NATIVE_LOGIN', '请使用本机 Codex 登录；项目簿不再发起独立网页授权。');
       const destination = new URL(identity.start());
       if (destination.protocol !== 'https:' || destination.hostname !== 'auth.openai.com' || destination.username || destination.password) throw new BridgeError(502, 'AUTH_URL', '官方登录地址无效。');
       response.writeHead(303, { Location: destination.href }); response.end(); return;
@@ -221,10 +227,17 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
     if (request.method === 'POST' && url.pathname === '/portal/logout') {
       await portalForm(request);
       activeAbort?.abort();
+      if (identity.kind === 'codex-cli') {
+        pairTokens.clear(); rotatePair();
+        html(response, 200, '<h1>网页连接已停用</h1><p>本机 Codex 登录保持不变。</p><p><a href="/">返回本机桥</a></p>'); return;
+      }
       await identity.logout();
       html(response, 200, '<h1>账号已断开</h1><p>本机进程中的登录令牌已清除。</p><p><a href="/">返回本机桥</a></p>'); return;
     }
     if (request.method === 'GET' && url.pathname === '/auth/callback') {
+      if (identity.kind === 'codex-cli') {
+        response.writeHead(303, { Location: '/' }); response.end(); return;
+      }
       try {
         await identity.callback(url.searchParams);
         lastLoginResult = 'success';
@@ -249,9 +262,11 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
     const auth = requireBearer(request);
     if (request.method === 'GET' && url.pathname === '/status') {
       store.expireResults();
-      json(response, 200, { ...publicIdentity(identity), quota: store.quota(), bridge_id: store.hostId }); return;
+      if (typeof identity.refresh === 'function') await identity.refresh();
+      json(response, 200, { ...publicIdentity(identity), ...(identity.kind === 'codex-cli' ? { auth_mode: 'codex-cli' } : {}), quota: store.quota(), bridge_id: store.hostId }); return;
     }
     if (request.method === 'GET' && url.pathname === '/models') {
+      if (typeof identity.refresh === 'function') await identity.refresh();
       requirePlan(); json(response, 200, { models: await models() }); return;
     }
     if (request.method === 'POST' && url.pathname === '/disconnect') {
@@ -260,6 +275,7 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
       json(response, 200, { disconnected: true, bridge_id: store.hostId }); return;
     }
     if (request.method === 'POST' && url.pathname === '/recognize') {
+      if (typeof identity.refresh === 'function') await identity.refresh();
       const status = requirePlan();
       const input = await recognitionBody(request);
       if (!(await models()).some(model => model.slug === input.model)) throw new BridgeError(400, 'MODEL_NOT_ALLOWED', '请选择官方已授权列表中的模型。');
@@ -273,13 +289,22 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
       if (reservation.cached) { json(response, 200, { ...result(reservation.result), cached: true }); return; }
       busy = true;
       const controller = new AbortController(); activeAbort = controller;
-      let timer;
+      let timer, recognitionPromise, recognitionSettled = false;
+      const releaseRecognition = () => {
+        // A timed-out HTTP response may finish before the adapter has killed
+        // its process and removed its temporary image. Keep that work locked.
+        if (activeAbort === controller) { activeAbort = undefined; busy = false; }
+      };
       try {
         const timeout = new Promise((_, reject) => { timer = setTimeout(() => {
           controller.abort(); reject(new BridgeError(504, 'RECOGNITION_TIMEOUT', '本次识别超时，可能已使用套餐额度；原请求不会自动重发。'));
         }, recognitionTimeoutMs); });
-        const raw = await Promise.race([recognizer({ identity, bytes: input.bytes, mime_type: input.mime_type, note: input.note, projects: input.projects, model: input.model }, { signal: controller.signal, timeoutMs: recognitionTimeoutMs }), timeout]);
+        recognitionPromise = Promise.resolve().then(() => recognizer({ identity, bytes: input.bytes, mime_type: input.mime_type, note: input.note, projects: input.projects, model: input.model }, { signal: controller.signal, timeoutMs: recognitionTimeoutMs }));
+        // Both outcomes are observed even when the HTTP timeout wins the race.
+        void recognitionPromise.then(() => { recognitionSettled = true; }, () => { recognitionSettled = true; });
+        const raw = await Promise.race([recognitionPromise, timeout]);
         requireBearer(request);
+        if (typeof identity.refresh === 'function') await identity.refresh();
         if (requirePlan().account_key !== status.account_key) throw new BridgeError(409, 'OAUTH_SUPERSEDED', '账号连接已更换，旧结果不会填入当前草稿。');
         validateRawRecognition(raw);
         store.succeed(auth.scope, input.requestId, raw);
@@ -290,7 +315,9 @@ export function createBridgeServer({ stateDir, store: providedStore, identity, r
         const code = typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,79}$/.test(error.code) ? error.code : 'RECOGNITION_FAILED';
         throw new BridgeError(502, code, 'Codex 未完整完成识别，原图和草稿仍在网页中；本请求不会自动重发。');
       } finally {
-        clearTimeout(timer); activeAbort = undefined; busy = false;
+        clearTimeout(timer);
+        if (!recognitionPromise || recognitionSettled) releaseRecognition();
+        else void recognitionPromise.then(releaseRecognition, releaseRecognition);
       }
       return;
     }

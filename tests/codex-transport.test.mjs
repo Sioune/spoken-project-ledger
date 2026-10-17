@@ -154,16 +154,110 @@ test('拒绝refusal、incomplete、未完成状态及缺少终止空行的截断
 });
 
 test('response.failed中的额度失败即使在文本delta之后仍拒绝结果', async () => {
-  for (const [code, expected, status] of [['subscription_sharing_usage_limit_exceeded', 'PLAN_USAGE_LIMIT', 429], ['subscription_sharing_usage_unavailable', 'PLAN_TEMPORARY', 503], ['subscription_sharing_user_unavailable', 'PLAN_TEMPORARY', 503], ['subscription_sharing_user_not_eligible', 'PLAN_NOT_ELIGIBLE', 403], ['subscription_sharing_unsupported_capability', 'PLAN_UNSUPPORTED', 400], ['unknown_private_code', 'PLAN_RESPONSE', 502]]) {
+  for (const [code, expected, status] of [['subscription_sharing_usage_limit_exceeded', 'PLAN_USAGE_LIMIT', 429], ['subscription_sharing_usage_unavailable', 'PLAN_TEMPORARY', 503], ['subscription_sharing_user_unavailable', 'PLAN_TEMPORARY', 503], ['subscription_sharing_user_not_eligible', 'PLAN_NOT_ELIGIBLE', 403], ['subscription_sharing_unsupported_capability', 'PLAN_UNSUPPORTED', 400], ['unknown_private_code', 'PLAN_PROVIDER_ERROR', 502]]) {
     const f = fixture({ response: stream(event({ type: 'response.output_text.delta', delta: '部分识别' }) + event({ type: 'response.failed', response: { error: { code, message: 'PRIVATE_DIAGNOSTIC' } } })) });
     await assert.rejects(recognizeWithPlan(f.input, f.options), check(expected, status));
   }
 });
 
-test('HTTP401/403/429/500返回具体安全错误，不读取或回显诊断body', async () => {
-  for (const [status, code, outputStatus] of [[401, 'PLAN_AUTH', 401], [403, 'PLAN_UNAVAILABLE', 403], [429, 'PLAN_USAGE_LIMIT', 429], [500, 'PLAN_RESPONSE', 502]]) {
+test('HTTP401/403/429/500返回具体安全错误，保留真实状态且不回显诊断body', async () => {
+  for (const [status, code, outputStatus] of [[401, 'PLAN_AUTH', 401], [403, 'PLAN_UNAVAILABLE', 403], [429, 'PLAN_USAGE_LIMIT', 429], [500, 'PLAN_HTTP_ERROR', 500]]) {
     const f = fixture({ response: new Response('PRIVATE_OAUTH_ACCESS_TOKEN PRIVATE_PROVIDER_BODY', { status }) });
     await assert.rejects(recognizeWithPlan(f.input, f.options), check(code, outputStatus)); assert.equal(f.requests.length, 1);
+  }
+});
+
+test('HTTP标准错误仅记录精确白名单code/type/param，原正文及headers不泄漏', async () => {
+  const diagnostics = [], response = Response.json({ error: { code: 'invalid_json_schema', type: 'invalid_request_error', param: 'text.format.schema', message: 'PRIVATE_PROVIDER_MESSAGE' }, private: 'PRIVATE_IMAGE' }, { status: 400, headers: { 'x-private': 'PRIVATE_HEADER' } });
+  const f = fixture({ response });
+  await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic: value => diagnostics.push(value) }), check('PLAN_HTTP_ERROR', 400));
+  assert.equal(diagnostics.length, 1);
+  assert.deepEqual(diagnostics[0], { stage: 'http_error', http_status: 400, content_type: 'json', data_length: Buffer.byteLength(JSON.stringify({ error: { code: 'invalid_json_schema', type: 'invalid_request_error', param: 'text.format.schema', message: 'PRIVATE_PROVIDER_MESSAGE' }, private: 'PRIVATE_IMAGE' })), event_name: 'other', event_type: 'other', error_shape: 'error_object', provider_code: 'invalid_json_schema', provider_type: 'invalid_request_error', provider_param: 'text.format.schema' });
+  assert.equal(JSON.stringify(diagnostics).includes('PRIVATE_'), false); assert.equal(Object.isFrozen(diagnostics[0]), true);
+  // Even an inconsistent provider code must not hide the actual HTTP status.
+  const g = fixture({ response: Response.json({ error: { code: 'subscription_sharing_user_not_eligible' } }, { status: 500 }) });
+  await assert.rejects(recognizeWithPlan(g.input, g.options), check('PLAN_NOT_ELIGIBLE', 500));
+});
+
+test('HTTP未知错误和detail仅返回固定形状分类，非JSON与超大错误body不解析', async () => {
+  const samples = [
+    [Response.json({ error: { code: 'PRIVATE_TOKEN', type: 'PRIVATE_TYPE', param: 'PRIVATE_IMAGE', message: 'PRIVATE_MESSAGE' } }, { status: 422 }), 'error_object', 'other'],
+    [Response.json({ detail: 'PRIVATE_ADMISSION_REASON' }, { status: 502 }), 'detail', 'unknown'],
+    [new Response('PRIVATE_NOT_JSON', { status: 500 }), 'not_json', 'unknown'],
+    [new Response(JSON.stringify({ error: { code: 'invalid_value', message: 'PRIVATE_' + 'x'.repeat(65536) } }), { status: 500 }), 'too_large', 'unknown'],
+    [new Response(null, { status: 500 }), 'empty', 'unknown'],
+  ];
+  for (const [response, shape, providerCode] of samples) {
+    const diagnostics = [], f = fixture({ response });
+    await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic: value => diagnostics.push(value) }), check('PLAN_HTTP_ERROR', response.status));
+    assert.equal(diagnostics.length, 1); assert.equal(diagnostics[0].stage, 'http_error'); assert.equal(diagnostics[0].http_status, response.status);
+    assert.equal(diagnostics[0].error_shape, shape); assert.equal(diagnostics[0].provider_code, providerCode);
+    assert.equal(JSON.stringify(diagnostics).includes('PRIVATE_'), false);
+    assert.deepEqual(Object.keys(diagnostics[0]).sort(), ['stage', 'http_status', 'content_type', 'data_length', 'event_name', 'event_type', 'error_shape', 'provider_code', 'provider_type', 'provider_param'].sort());
+  }
+});
+
+test('HTTP错误读取中断可诊断且保留HTTP状态，挂起仍受同一超时保护', async () => {
+  let part = 0, cancelled = false;
+  const response = new Response(new ReadableStream({ pull(controller) { if (!part++) controller.enqueue(new TextEncoder().encode('PRIVATE_PART')); else controller.error(new Error('PRIVATE_READ_ERROR')); } }), { status: 502 });
+  const diagnostics = [], f = fixture({ response });
+  await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic: value => diagnostics.push(value) }), check('PLAN_HTTP_ERROR', 502));
+  assert.equal(diagnostics[0].error_shape, 'read_error'); assert.equal(JSON.stringify(diagnostics).includes('PRIVATE_'), false);
+  const g = fixture({ response: new Response(new ReadableStream({ pull() { return new Promise(() => {}); }, cancel() { cancelled = true; } }), { status: 500 }) });
+  await assert.rejects(recognizeWithPlan(g.input, { ...g.options, timeoutMs: 5 }), check('PLAN_TIMEOUT', 504)); assert.equal(cancelled, true);
+});
+
+test('SSE provider失败明确诊断来源与白名单分类，未知错误不暴露动态字段', async () => {
+  const samples = [
+    [{ type: 'response.failed', response: { error: { code: 'invalid_image', type: 'invalid_request_error', param: 'input[0].content[1].image_url', message: 'PRIVATE_BODY' } } }, 'PLAN_PROVIDER_ERROR', 502, 'response_error', 'invalid_image', 'invalid_request_error', 'input[0].content[1].image_url'],
+    [{ type: 'error', error: { code: 'subscription_sharing_route_not_supported', type: 'invalid_request_error', param: 'model', message: 'PRIVATE_BODY' } }, 'PLAN_ROUTE', 403, 'error_object', 'subscription_sharing_route_not_supported', 'invalid_request_error', 'model'],
+    [{ type: 'error', code: 'chatpass_v2_scope_not_authorized', param: 'tools', message: 'PRIVATE_BODY' }, 'PLAN_PERMISSION', 403, 'top_level_error', 'chatpass_v2_scope_not_authorized', 'error', 'tools'],
+    [{ type: 'error', code: 'chatpass_v2_invalid_authorization_context', message: 'PRIVATE_BODY' }, 'PLAN_PERMISSION', 403, 'top_level_error', 'chatpass_v2_invalid_authorization_context', 'error', 'unknown'],
+    [{ type: 'response.failed', response: { error: { code: 'subscription_sharing_invalid_user', message: 'PRIVATE_BODY' } } }, 'PLAN_AUTH', 401, 'response_error', 'subscription_sharing_invalid_user', 'unknown', 'unknown'],
+    [{ type: 'response.failed', response: { error: { code: 'PRIVATE_CODE', type: 'PRIVATE_TYPE', param: 'PRIVATE_PARAM', message: 'PRIVATE_BODY' } } }, 'PLAN_PROVIDER_ERROR', 502, 'response_error', 'other', 'other', 'other'],
+  ];
+  for (const [value, code, status, shape, providerCode, providerType, providerParam] of samples) {
+    const diagnostics = [], f = fixture({ response: stream(value) });
+    await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic: entry => diagnostics.push(entry) }), check(code, status));
+    assert.deepEqual(diagnostics, [{ stage: 'provider_error', http_status: 200, content_type: 'event-stream', data_length: Buffer.byteLength(JSON.stringify(value)), event_name: value.type, event_type: value.type, error_shape: shape, provider_code: providerCode, provider_type: providerType, provider_param: providerParam }]);
+    assert.equal(JSON.stringify(diagnostics).includes('PRIVATE_'), false);
+  }
+});
+
+test('completed多消息仍拒绝并仅诊断数量与phase计数，不采用commentary或部分结果', async () => {
+  for (const count of [0, 2]) {
+    const value = complete(raw()); value.response.output = count ? [{ ...value.response.output[0], phase: 'commentary' }, { ...value.response.output[0], phase: 'final_answer' }] : [];
+    const diagnostics = [], f = fixture({ response: stream(value) });
+    await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic: entry => diagnostics.push(entry) }), check('PLAN_MESSAGE_COUNT', 502));
+    assert.equal(diagnostics.length, 1); assert.equal(diagnostics[0].stage, 'completed_shape'); assert.equal(diagnostics[0].shape_reason, 'message_count');
+    assert.equal(diagnostics[0].message_count, count); assert.equal(diagnostics[0].output_items, count); assert.equal(diagnostics[0].commentary_messages, count ? 1 : 0); assert.equal(diagnostics[0].final_answer_messages, count ? 1 : 0);
+    assert.equal(JSON.stringify(diagnostics).includes(raw().title), false);
+  }
+});
+
+test('completed和item的角色/状态异常返回固定本地码，未知值只分类other', async () => {
+  const cases = [
+    [value => { value.response.status = 'PRIVATE_STATUS'; }, 'PLAN_INCOMPLETE', 'response_status', 'other', 'unknown', 'unknown'],
+    [value => { value.response.output[0].status = 'in_progress'; }, 'PLAN_MESSAGE_STATUS', 'message_status', 'completed', 'assistant', 'in_progress'],
+    [value => { value.response.output[0].status = 'PRIVATE_STATUS'; }, 'PLAN_MESSAGE_STATUS', 'message_status', 'completed', 'assistant', 'other'],
+    [value => { value.response.output[0].role = 'user'; }, 'PLAN_MESSAGE_ROLE', 'role', 'completed', 'user', 'completed'],
+    [value => { value.response.output[0].role = 'PRIVATE_ROLE'; }, 'PLAN_MESSAGE_ROLE', 'role', 'completed', 'other', 'completed'],
+  ];
+  for (const [edit, code, reason, responseStatus, role, status] of cases) {
+    const value = complete(raw()); edit(value); const diagnostics = [], f = fixture({ response: stream(value) });
+    await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic: entry => diagnostics.push(entry) }), check(code, 502));
+    assert.equal(diagnostics[0].stage, 'completed_shape'); assert.equal(diagnostics[0].shape_reason, reason); assert.equal(diagnostics[0].response_status, responseStatus); assert.equal(diagnostics[0].message_role, role); assert.equal(diagnostics[0].message_status, status); assert.equal(JSON.stringify(diagnostics).includes('PRIVATE_'), false);
+  }
+  const diagnostics = [], f = fixture({ response: stream({ type: 'response.output_item.added', item: { type: 'message', role: 'PRIVATE_ROLE', status: 'PRIVATE_STATUS', content: [] } }) });
+  await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic: entry => diagnostics.push(entry) }), check('PLAN_MESSAGE_ROLE', 502));
+  assert.equal(diagnostics[0].stage, 'message_shape'); assert.equal(diagnostics[0].message_role, 'other'); assert.equal(diagnostics[0].message_status, 'other'); assert.equal(JSON.stringify(diagnostics).includes('PRIVATE_'), false);
+});
+
+test('新增诊断回调即使抛错或拒绝也不改变HTTP/provider/消息错误', async () => {
+  for (const onDiagnostic of [() => { throw new Error('PRIVATE_DIAGNOSTIC'); }, async () => { throw new Error('PRIVATE_DIAGNOSTIC'); }]) {
+    for (const [response, code, status] of [[Response.json({ detail: 'PRIVATE_DETAIL' }, { status: 500 }), 'PLAN_HTTP_ERROR', 500], [stream({ type: 'response.failed', response: { error: { code: 'PRIVATE_CODE' } } }), 'PLAN_PROVIDER_ERROR', 502], [stream({ type: 'response.completed', response: { status: 'completed', output: [] } }), 'PLAN_MESSAGE_COUNT', 502]]) {
+      const f = fixture({ response }); await assert.rejects(recognizeWithPlan(f.input, { ...f.options, onDiagnostic }), check(code, status));
+    }
   }
 });
 

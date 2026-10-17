@@ -41,6 +41,14 @@ function bridgeMessage(cause: unknown) {
       PLAN_STREAM_JSON: "识别数据流中的事件格式无效，没有采用部分内容。原图与原编号已保留。",
       PLAN_STREAM_EVENT: "识别数据流中的事件类型无法核对，没有采用部分内容。原图与原编号已保留。",
       PLAN_RESPONSE: "计划服务没有返回可核对的识别结果。原图保留，可按原编号核对或手动填写。",
+      PLAN_HTTP_ERROR: "识别请求被服务拒绝，尚未取得可采用的结果。请先核对本机诊断；不会自动重发。原图与草稿保留。",
+      TRANSPORT_UNAVAILABLE: "本机识图程序未能加载，未向模型发送本次识别，也没有回退旧版本。失败仍计本机尝试次数；修复后须明确准备新识别。原图与草稿保留。",
+      PLAN_PROVIDER_ERROR: "识别服务在数据流中报告失败，未采用部分结果。请先核对本机诊断；原图与原编号保留。",
+      PLAN_MESSAGE_COUNT: "完成响应中的事项消息数量无法确定，没有选取或拼接内容。原图与草稿保留。",
+      PLAN_MESSAGE_STATUS: "识别消息尚未完整完成，没有采用内容。原图与草稿保留。",
+      PLAN_MESSAGE_ROLE: "识别消息的来源角色无法核对，没有采用内容。原图与草稿保留。",
+      PLAN_ROUTE: "当前计划授权不支持此次接口请求，请先核对本机集成配置，不要反复登录或重试同一请求。",
+      PLAN_PERMISSION: "当前计划授权范围不允许此次识别，请先核对应用授权配置。原图与草稿保留。",
       PLAN_RESPONSE_SIZE: "识别结果为空或超出允许大小，已停止采用。原图与草稿仍保留。",
       CODEX_INVALID_RESPONSE: "识别结构或证据无效，没有采用结果。原图和草稿仍保留。",
       INVALID_RECOGNITION: "本机返回的识别结构无效或过大，没有采用结果。",
@@ -71,6 +79,27 @@ function bridgeMessage(cause: unknown) {
       IMAGE_SIZE: "原图大小超过本机允许范围，请选取不超过1,500,000字节的图片。原草稿仍保留。",
       IMAGE_TYPE: "本机核对的原图格式不符，仅接受真实PNG、JPEG或WebP。原草稿仍保留。",
       CONSENT_REQUIRED: "请先明确同意本图发送OpenAI并使用已授权计划的额度。",
+      CODEX_CLI_NOT_FOUND: "未找到已安装的官方 Codex CLI。请先完成本机安装与登录；原图和草稿保留。",
+      CODEX_CLI_NOT_LOGGED_IN: "本机 Codex CLI 尚未登录。请在本机完成一次登录后再检查；项目簿不会另起网页授权。",
+      CODEX_CLI_ACCOUNT: "本机 Codex 账号暂时无法核对。请检查本机登录状态，原图与草稿保留。",
+      CODEX_CLI_TIMEOUT: "本机 Codex 识别超时，可能已使用额度。原图和原编号保留，不会自动重发。",
+      CODEX_CLI_FAILED: "本机 Codex 未能完成识别。原图和草稿保留；新尝试须明确准备新编号。",
+      CODEX_CLI_OUTPUT: "本机 Codex 未返回完整且合规的事项结果，没有采用部分内容。原图和草稿保留。",
+      CODEX_CLI_TOOL: "本机 Codex 返回了被禁止的工具或执行请求，已拒绝采用；没有保存事项。",
+      CODEX_RUNTIME: "本机 Codex 未能启动或运行配置无效，原图和草稿保留。请先检查本机 CLI。",
+      CODEX_NATIVE_FAILED: "本机 Codex 识别失败，未采用结果。原图和原编号保留，不会自动重发。",
+      CODEX_NATIVE_EXIT: "本机 Codex 进程未正常完成，未采用部分内容。原图和草稿保留。",
+      CODEX_NATIVE_INCOMPLETE: "本机 Codex 缺少完整完成回执，未采用部分结果。原图和原编号保留。",
+      CODEX_NATIVE_JSON: "本机 Codex 结果不是有效的事项 JSON，未采用内容。原图和草稿保留。",
+      CODEX_NATIVE_JSONL: "本机 Codex 响应格式无效，未采用部分结果。原图和草稿保留。",
+      CODEX_NATIVE_SCHEMA: "本机 Codex 结果不符合允许的事项结构，未采用内容。原图和草稿保留。",
+      CODEX_NATIVE_TOOL: "本机 Codex 返回了被禁止的工具或执行请求，已停止处理，未保存事项。",
+      CODEX_NATIVE_EVENT: "本机 Codex 返回了无法核对的事件，未采用内容。原图和草稿保留。",
+      CODEX_NATIVE_MESSAGE: "本机 Codex 返回的结果消息存在歧义或尚未完成，没有选取或拼接内容。",
+      CODEX_NATIVE_TERMINAL: "本机 Codex 完成回执后仍有额外事件，未采用本次结果。原图和草稿保留。",
+      CODEX_NATIVE_SIZE: "本机 Codex 响应超过允许大小，已停止识别。原图和草稿保留。",
+      CODEX_NATIVE_IO: "本机 Codex 通信中断，未采用部分结果。原图和原编号保留。",
+      CODEX_NATIVE_CLEANUP: "本机识图临时文件未能清理，已停止采用结果。请先检查本机临时目录。",
     };
     if (messages[cause.code]) return `${messages[cause.code]}（${cause.code}）`;
     if (cause.status === 401 || cause.status === 403) return "本机授权或连接已失效。请在本机授权页核对账号与网页连接权限，再使用新的连接码连接。图片草稿仍保留。";
@@ -103,18 +132,19 @@ export default function CodexBridgePanel({ scope, disabled, imageReady, requestI
     finally { if (currentEpoch === epoch.current) { setWorking(""); setConsent(false); } }
   }
 
-  return <section className="codex-bridge-panel" aria-label="本机授权识图（Codex模型）">
-    <div className="codex-bridge-heading"><h4>本机授权识图（Codex模型）</h4><span>{authorized ? "本人本机已连接" : "等待本人连接"}</span></div>
-    <p>在这台电脑运行本机桥接，并在独立授权页使用本人账号授权。识别是独立请求，不会继承当前聊天。电脑和桥接需保持运行；手机不能直接连接本电脑。</p>
-    <a className="intake-link codex-portal-link" href={`${BRIDGE}/`} target="_blank" rel="noopener noreferrer">打开本机授权与连接码页面<ExternalLink size={15} /></a>
-    {!token ? <div className="codex-pair-row"><label className="intake-label">本机连接码<input aria-label="本机连接码" autoComplete="off" inputMode="numeric" pattern="[0-9]{8}" maxLength={8} value={code} disabled={locked} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="8 位连接码" /></label><button type="button" className="intake-button" disabled={locked || !/^\d{8}$/.test(code)} onClick={() => { void action("pair", async currentEpoch => { const paired = await bridgeJSON<{ token: string; bridge_id: string }>("/pair", "", { code, scope }); if (currentEpoch !== epoch.current) return; if (!paired.token || !paired.bridge_id) throw new Error("配对响应不完整"); setToken(paired.token); setBridgeId(paired.bridge_id); setCode(""); setMessage("网页已连接本机。请手动刷新授权状态，再加载可用模型。刷新网页后需要重新连接，图片草稿不受影响。"); }); }}><Link2 size={16} />连接本机桥接</button></div> : <div className="codex-connection-actions"><button type="button" className="intake-button" disabled={locked} onClick={() => { void action("status", async currentEpoch => { const next = await bridgeJSON<BridgeStatus>("/status", token); if (currentEpoch !== epoch.current) return; if (next.bridge_id !== bridgeId || !next.quota || !Number.isFinite(next.quota.used) || !Number.isFinite(next.quota.max)) throw new Error("状态响应不完整"); setStatus(next); if (!next.connected || !next.plan_authorized) { setModels([]); setModel(""); } setMessage(next.connected && next.plan_authorized ? "已核对本人本机授权。请加载并选择当前可用的模型。" : "本机尚未完成计划授权，请在本机授权页完成后，再手动刷新状态。"); }); }}><RefreshCw size={16} />刷新本机授权状态</button><button type="button" className="intake-link" disabled={locked} onClick={() => { void action("disconnect", async () => { try { await bridgeJSON("/disconnect", token, {}); } finally { epoch.current++; setToken(""); setCode(""); setBridgeId(""); setStatus(null); setModels([]); setModel(""); setWorking(""); setConsent(false); setMessage("已清除本页连接。图片与事项草稿仍保留。重新连接需在本机获取新连接码。"); } }); }}><Unplug size={15} />断开本页连接</button></div>}
-    {status && <div className="codex-account-status"><strong>{status.account_label || "本人账号"}</strong><span>{status.plan_authorized ? "ChatGPT 计划已授权" : "计划尚未授权"}</span><span>本机今日使用 {status.quota.used} / {status.quota.max} 次 · {status.quota.day}</span></div>}
+  return <section className="codex-bridge-panel" aria-label="本机 Codex 识图">
+    <div className="codex-bridge-heading"><h4>本机 Codex 识图</h4><span>{authorized ? "本人本机已连接" : "等待本人连接"}</span></div>
+    <p>复用这台电脑已有的 Codex CLI 登录，由官方 CLI 管理登录续期。每张图是独立识别任务，不继承当前聊天。电脑和本机服务需保持运行；手机不能直连本电脑。</p>
+    <a className="intake-link codex-portal-link" href={`${BRIDGE}/`} target="_blank" rel="noopener noreferrer">打开本机连接与检查页面<ExternalLink size={15} /></a>
+    {!token ? <div className="codex-pair-row"><label className="intake-label">本机连接码<input aria-label="本机连接码" autoComplete="off" inputMode="numeric" pattern="[0-9]{8}" maxLength={8} value={code} disabled={locked} onChange={event => setCode(event.target.value.replace(/\D/g, "").slice(0, 8))} placeholder="8 位连接码" /></label><button type="button" className="intake-button" disabled={locked || !/^\d{8}$/.test(code)} onClick={() => { void action("pair", async currentEpoch => { const paired = await bridgeJSON<{ token: string; bridge_id: string }>("/pair", "", { code, scope }); if (currentEpoch !== epoch.current) return; if (!paired.token || !paired.bridge_id) throw new Error("配对响应不完整"); setToken(paired.token); setBridgeId(paired.bridge_id); setCode(""); setMessage("网页已连接本机。请检查 Codex 登录，再加载可用模型。网页刷新后需重新配对，CLI 登录不会因此清除。"); }); }}><Link2 size={16} />连接本机桥接</button></div> : <div className="codex-connection-actions"><button type="button" className="intake-button" disabled={locked} onClick={() => { void action("status", async currentEpoch => { const next = await bridgeJSON<BridgeStatus>("/status", token); if (currentEpoch !== epoch.current) return; if (next.bridge_id !== bridgeId || !next.quota || !Number.isFinite(next.quota.used) || !Number.isFinite(next.quota.max)) throw new Error("状态响应不完整"); setStatus(next); if (!next.connected || !next.plan_authorized) { setModels([]); setModel(""); } setMessage(next.connected && next.plan_authorized ? "已核对本机 Codex 登录。请加载并选择当前可用模型。" : "本机 Codex CLI 尚未登录或不可用。请在本机登录后再次检查；不需要独立网页授权。"); }); }}><RefreshCw size={16} />检查本机 Codex 登录</button><button type="button" className="intake-link" disabled={locked} onClick={() => { void action("disconnect", async () => { try { await bridgeJSON("/disconnect", token, {}); } finally { epoch.current++; setToken(""); setCode(""); setBridgeId(""); setStatus(null); setModels([]); setModel(""); setWorking(""); setConsent(false); setMessage("已清除本页连接。图片与事项草稿仍保留。重新连接需在本机获取新连接码。"); } }); }}><Unplug size={15} />断开本页连接</button></div>}
+    {status && <div className="codex-account-status"><strong>{status.account_label || "本人账号"}</strong><span>{status.plan_authorized ? "Codex CLI 已登录" : "Codex CLI 尚未登录"}</span><span>本机今日使用 {status.quota.used} / {status.quota.max} 次 · {status.quota.day}</span></div>}
     {token && <div className="codex-model-row"><label className="intake-label">识图模型<select aria-label="Codex识图模型" value={model} disabled={locked || !authorized || !models.length} onChange={event => { setModel(event.target.value); setConsent(false); }}><option value="">请明确选择可用模型</option>{models.map(item => <option key={item.slug} value={item.slug}>{item.display_name || item.slug}</option>)}</select></label><button type="button" className="intake-button" disabled={locked || !authorized} onClick={() => { void action("models", async currentEpoch => { const catalog = await bridgeJSON<{ models: BridgeModel[] }>("/models", token); if (currentEpoch !== epoch.current) return; const available = Array.isArray(catalog.models) ? catalog.models.filter(item => item && typeof item.slug === "string" && item.slug && typeof item.display_name === "string") : []; setModels(available); setModel(current => available.some(item => item.slug === current) ? current : requestModel && available.some(item => item.slug === requestModel) ? requestModel : available.some(item => item.slug === "gpt-6.1-sol") ? "gpt-6.1-sol" : ""); if (!available.length) setError("当前授权未返回可用模型。已保留所有草稿字段，请核对本机账号与计划后重新加载；不会自动选用其他服务。"); else setMessage("已加载本机当前可用模型。仅在列表中提供时预选 gpt-6.1-sol；其他模型需本人明确选择。"); }); }}>加载可用模型</button></div>}
-    <p className="codex-usage-note">本图原图、补充说明及项目名称会发送给 OpenAI，使用本人已授权 ChatGPT 计划及可用额度，不承诺免费。不会自动回落到另行收费的 API。</p>
-    <details className="codex-retention"><summary>原图、草稿和识别结果如何保留</summary><p>本机桥接收到的原图及授权令牌仅保留在运行内存。结构化识别结果在本机缓存七天，到期访问时清理；请求编号、图片校验值和每日计数长期保留，用于防止重复识别。</p><p>网页尚未保存的原图、说明及字段草稿仍在本人浏览器的 IndexedDB 中，清理草稿或浏览器站点数据可删除；正式保存后按私有项目簿的附件规则保留。</p><p>发往 OpenAI 的请求设置 store:false，这不等于零保留。服务端数据处理以当前账号和工作区政策为准，不套用另行 API 的固定保留期限。</p></details>
+    <p className="codex-usage-note">本图原图、补充说明及项目名称会通过本机 Codex 发给 OpenAI，使用当前 ChatGPT 账号的可用额度，不承诺免费，不开启单独付费 API。</p>
+    <details className="codex-retention"><summary>原图、草稿和识别结果如何保留</summary><p>原图临时写入本机隔离任务目录，任务结束后删除；CLI 使用 ephemeral 模式，不保存本次会话文件。本服务不读取或复制 CLI 登录令牌，登录由官方 CLI 管理。</p><p>结构化识别结果在本机缓存七天，到期访问时清理；请求编号、图片校验值和每日计数长期保留。网页尚未保存的原图、说明及字段草稿仍在本人浏览器的 IndexedDB 中，清理草稿或浏览器站点数据可删除。</p><p>正式保存后按私有项目簿附件规则保留；服务端数据处理以当前账号和工作区政策为准，不承诺零保留。</p></details>
     {modelChanged && <p className="codex-bridge-error" role="alert">原请求使用 {requestModel}。更换模型前，请明确准备一次新的识别；重试原请求需选择原模型。</p>}
     <label className="intake-check"><input type="checkbox" checked={consent} disabled={locked || !authorized || !model || !imageReady || (!quotaAvailable && !canCheckOriginal) || modelChanged} onChange={event => setConsent(event.target.checked)} /><span>我同意本图原图、说明及项目名称发送给 OpenAI，并使用本人已授权计划的可用额度。</span></label>
     <div className="codex-recognition-actions"><button type="button" className="intake-button intake-primary" disabled={locked || !authorized || !model || !imageReady || (!quotaAvailable && !canCheckOriginal) || !consent || modelChanged} onClick={() => { void action("recognize", async currentEpoch => { await onRecognize(model, async input => { if (currentEpoch !== epoch.current) throw new Error("本页连接已变化，未发送旧请求"); const form = new FormData(); form.set("image", input.image); form.set("note", input.note); form.set("projects_json", JSON.stringify(input.projects)); form.set("request_id", input.requestId); form.set("model", model); form.set("consent", "true"); const result = await bridgeJSON<CodexBridgeResult>("/recognize", token, form); if (currentEpoch !== epoch.current) throw new Error("本页连接已变化，未采用识别响应"); return result; }); }); }}>{working === "recognize" ? <LoaderCircle size={16} className="spin" /> : null}用Codex识别并预览</button>{requestModel && <button type="button" className="intake-link" disabled={locked} onClick={() => { setConsent(false); onNewRequest(); setMessage("已准备新的识别编号。下次发送会使用计划额度；当前图片与人工字段保留。"); }}>准备一次新的Codex识别（将使用额度）</button>}</div>
     {working && working !== "recognize" && <p className="codex-bridge-message" role="status">正在核对本机连接…</p>}{message && <p className="codex-bridge-message" role="status">{message}</p>}{error && <p className="codex-bridge-error" role="alert">{error}</p>}
   </section>;
 }
+

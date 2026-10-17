@@ -16,15 +16,39 @@ function contentTypeClass(value) {
   if (mime.startsWith('text/')) return 'text';
   return 'other';
 }
+const knownCodes = new Set(['subscription_sharing_usage_limit_exceeded', 'subscription_sharing_usage_unavailable', 'subscription_sharing_user_unavailable',
+  'subscription_sharing_user_not_eligible', 'subscription_sharing_unsupported_capability', 'subscription_sharing_route_not_supported',
+  'subscription_sharing_invalid_user', 'chatpass_v2_scope_not_authorized', 'chatpass_v2_invalid_authorization_context',
+  'invalid_request_error', 'invalid_json_schema', 'unsupported_parameter', 'model_not_found', 'invalid_value', 'invalid_image',
+  'unsupported_content_type', 'server_error', 'rate_limit_exceeded']);
+const knownTypes = new Set(['invalid_request_error', 'authentication_error', 'permission_error', 'not_found_error', 'rate_limit_error', 'server_error', 'api_error', 'error']);
+const knownParams = new Set(['input', 'input[0].content', 'input[0].content[1]', 'input[0].content[1].image_url', 'model',
+  'text.format', 'text.format.schema', 'tools', 'store', 'stream', 'instructions']);
+const classified = (value, allowlist) => value === null || value === undefined ? 'unknown' : allowlist.has(value) ? value : 'other';
+const statusClass = value => classified(value, new Set(['completed', 'in_progress', 'incomplete', 'failed', 'cancelled', 'queued']));
+const roleClass = value => classified(value, new Set(['assistant', 'user', 'system', 'developer', 'tool']));
+function providerDetails(value, fallback = 'other') {
+  let error, shape = fallback;
+  if (object(value?.response?.error)) { error = value.response.error; shape = 'response_error'; }
+  else if (object(value?.error)) { error = value.error; shape = 'error_object'; }
+  else if (object(value) && (Object.hasOwn(value, 'code') || value.type === 'error')) { error = value; shape = 'top_level_error'; }
+  else if (object(value) && typeof value.detail === 'string') shape = 'detail';
+  return { error_shape: shape, provider_code: classified(error?.code, knownCodes),
+    provider_type: classified(error?.type, knownTypes), provider_param: classified(error?.param, knownParams) };
+}
 
-function providerError(status, code) {
+function providerError(status, code, source = 'http') {
   if (code === 'subscription_sharing_usage_limit_exceeded' || status === 429) return fail(429, 'PLAN_USAGE_LIMIT', 'ChatGPT计划额度已达上限，请查看ChatGPT用量设置后再试。');
   if (['subscription_sharing_usage_unavailable', 'subscription_sharing_user_unavailable'].includes(code) || status === 503) return fail(503, 'PLAN_TEMPORARY', 'ChatGPT计划可用性暂时无法核对，请保留连接并稍后再试。');
   if (code === 'subscription_sharing_user_not_eligible') return fail(403, 'PLAN_NOT_ELIGIBLE', '当前账号、工作区或地区尚不能使用此计划授权路径，请核对服务资格。');
   if (code === 'subscription_sharing_unsupported_capability') return fail(400, 'PLAN_UNSUPPORTED', '当前授权路径不支持这次请求的能力，请核对模型和请求配置。');
+  if (code === 'subscription_sharing_route_not_supported') return fail(403, 'PLAN_ROUTE', '当前ChatGPT授权路径不支持此接口，请核对本机请求配置。');
+  if (code === 'subscription_sharing_invalid_user') return fail(401, 'PLAN_AUTH', 'ChatGPT账号授权上下文无法核验，请检查本机登录。');
+  if (['chatpass_v2_scope_not_authorized', 'chatpass_v2_invalid_authorization_context'].includes(code)) return fail(403, 'PLAN_PERMISSION', '当前ChatGPT授权范围不允许此次识图，请核对应用授权。');
   if (status === 403) return fail(403, 'PLAN_UNAVAILABLE', '当前ChatGPT计划暂不可用于这次识图，请核对授权与可用额度。');
   if (status === 401) return fail(401, 'PLAN_AUTH', 'ChatGPT授权已失效，请在本机重新登录。');
-  return fail(502, 'PLAN_RESPONSE', 'ChatGPT识图服务未能完成请求，原图草稿仍保留。');
+  return fail(source === 'http' && status >= 400 && status <= 599 ? status : 502,
+    source === 'http' ? 'PLAN_HTTP_ERROR' : 'PLAN_PROVIDER_ERROR', 'ChatGPT识图服务未能完成请求，原图草稿仍保留。');
 }
 function imageValid(bytes, mime) {
   const buffer = Buffer.from(bytes);
@@ -34,18 +58,29 @@ function imageValid(bytes, mime) {
   return false;
 }
 const toolType = type => typeof type === 'string' && /(?:function_call|custom_tool|tool_call|web_search|file_search|computer_call|shell_call|mcp_call|code_interpreter|image_generation_call|tool_search|apply_patch_call)/i.test(type);
-function inspectItem(item) {
+function inspectItem(item, reportShape) {
   if (!object(item) || toolType(item.type) || !['message', 'reasoning'].includes(item.type)) throw fail(502, 'PLAN_TOOL_CALL', '识图返回了不允许的工具或执行请求，已拒绝处理。');
   if (item.type === 'message') {
-    if (item.role !== undefined && item.role !== 'assistant') throw fail(502, 'PLAN_RESPONSE', '识图响应角色无效。');
+    if (item.role !== undefined && item.role !== 'assistant') {
+      reportShape?.('role', item);
+      throw fail(502, 'PLAN_MESSAGE_ROLE', '识图响应角色无效，未采用结果。');
+    }
     if (item.content !== undefined && (!Array.isArray(item.content) || item.content.some(part => !object(part) || part.type !== 'output_text' || typeof part.text !== 'string'))) throw fail(502, 'PLAN_REFUSAL', 'ChatGPT未提供可用的识图结果，原图草稿仍保留。');
   }
 }
-function completedResult(response) {
-  if (!object(response) || response.status !== 'completed' || !Array.isArray(response.output)) throw fail(502, 'PLAN_INCOMPLETE', '识图未完整完成，不能使用部分结果。');
-  const messages = [];
-  for (const item of response.output) { inspectItem(item); if (item.type === 'message') messages.push(item); }
-  if (messages.length !== 1 || messages[0].status !== undefined && messages[0].status !== 'completed') throw fail(502, 'PLAN_RESPONSE', '识图结果不完整或存在歧义，请重新核对。');
+function completedResult(response, diagnostic) {
+  const output = object(response) && Array.isArray(response.output) ? response.output : [];
+  const messages = output.filter(item => object(item) && item.type === 'message');
+  const report = (reason, item) => diagnostic?.({ shape_reason: reason, response_status: statusClass(response?.status),
+    output_items: output.length, message_count: messages.length, message_role: roleClass(item?.role), message_status: statusClass(item?.status),
+    commentary_messages: messages.filter(message => message.phase === 'commentary').length,
+    final_answer_messages: messages.filter(message => message.phase === 'final_answer').length });
+  if (!object(response) || response.status !== 'completed' || !Array.isArray(response.output)) {
+    report('response_status'); throw fail(502, 'PLAN_INCOMPLETE', '识图未完整完成，不能使用部分结果。');
+  }
+  for (const item of output) inspectItem(item, report);
+  if (messages.length !== 1) { report('message_count'); throw fail(502, 'PLAN_MESSAGE_COUNT', '识图完成结果的消息数量存在歧义，未采用结果。'); }
+  if (messages[0].status !== undefined && messages[0].status !== 'completed') { report('message_status', messages[0]); throw fail(502, 'PLAN_MESSAGE_STATUS', '识图消息尚未完整完成，未采用结果。'); }
   const text = (messages[0].content ?? []).map(part => part.text).join('');
   if (!text || Buffer.byteLength(text) > 65536) throw fail(502, 'PLAN_RESPONSE_SIZE', '识图结果为空或过大，已停止处理。');
   let result;
@@ -78,15 +113,40 @@ export async function recognizeWithPlan({ identity, bytes, mime_type, note = '',
       if (controller.signal.aborted) throw cancelled();
       if (!initialAccount || identity.status().account_key !== initialAccount) throw fail(409, 'OAUTH_SUPERSEDED', 'ChatGPT账号连接已更换，请重新预览。');
       const response = await fetchImpl(ENDPOINT, { method: 'POST', redirect: 'error', signal: controller.signal, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body: JSON.stringify({ model, instructions: recognitionInstructions, input: [{ role: 'user', content: [{ type: 'input_text', text: JSON.stringify({ note, project_names: projects.map(project => project.name) }) }, { type: 'input_image', image_url: `data:${mime_type};base64,${Buffer.from(bytes).toString('base64')}`, detail: 'high' }] }], tools: [], text: { format: { type: 'json_schema', name: 'project_ledger_image_intake', strict: true, schema: recognitionSchema } }, store: false, stream: true }) });
-      if (!response.ok) { try { await response.body?.cancel(); } catch { /* Do not read sensitive provider diagnostics. */ } throw providerError(response.status); }
       const contentType = contentTypeClass(response.headers.get('content-type'));
-      function diagnostic(stage, dataLength = 0, eventName, eventType, parsedEvents) {
+      function diagnostic(stage, dataLength = 0, eventName, eventType, parsedEvents, extra = {}) {
         if (typeof onDiagnostic !== 'function') return;
         const metadata = Object.freeze({ stage, http_status: response.status, content_type: contentType,
           data_length: dataLength, event_name: diagnosticEvent(eventName), event_type: diagnosticEvent(eventType),
-          ...(stage === 'eof' ? { parsed_events: parsedEvents } : {}) });
+          ...(stage === 'eof' ? { parsed_events: parsedEvents } : {}), ...extra });
         // Logging is opt-in. A diagnostic consumer cannot change recognition behavior.
         try { void Promise.resolve(onDiagnostic(metadata)).catch(() => {}); } catch { /* No raw errors are logged. */ }
+      }
+      if (!response.ok) {
+        let value, errorShape = 'empty', errorSize = 0;
+        if (response.body) {
+          reader = response.body.getReader(); const chunks = [];
+          try {
+            while (true) {
+              const part = await reader.read(); if (part.done) break;
+              errorSize += part.value.byteLength;
+              if (errorSize > 65536) { errorShape = 'too_large'; break; }
+              chunks.push(part.value);
+            }
+            if (errorShape !== 'too_large' && errorSize) {
+              try { value = JSON.parse(Buffer.concat(chunks).toString('utf8')); errorShape = 'other'; }
+              catch { errorShape = 'not_json'; }
+            }
+          } catch { errorShape = 'read_error'; }
+          void reader.cancel().catch(() => {});
+        }
+        if (controller.signal.aborted) throw cancelled();
+        const details = providerDetails(value, errorShape);
+        diagnostic('http_error', errorSize, undefined, undefined, undefined, details);
+        const error = providerError(response.status, details.provider_code);
+        // The safe local classification must not replace the real admission status.
+        error.status = response.status;
+        throw error;
       }
       // The plan route can omit Content-Type; its body must still pass every SSE check.
       if (!response.body || !['event-stream', 'missing'].includes(contentType)) {
@@ -110,11 +170,17 @@ export async function recognizeWithPlan({ identity, bytes, mime_type, note = '',
         }
         parsedEvents++;
         if (toolType(event.type) || event.type.includes('refusal')) throw fail(502, 'PLAN_TOOL_CALL', '识图返回了工具请求或拒绝响应，已停止处理。');
-        if (event.item !== undefined) inspectItem(event.item);
+        if (event.item !== undefined) inspectItem(event.item, (reason, item) => diagnostic('message_shape', Buffer.byteLength(data), name, event.type, undefined,
+          { shape_reason: reason, message_role: roleClass(item.role), message_status: statusClass(item.status), message_count: 1 }));
         if (event.part !== undefined && (!object(event.part) || !['output_text', 'reasoning_text', 'summary_text'].includes(event.part.type))) throw fail(502, 'PLAN_REFUSAL', 'ChatGPT没有提供可用识图内容。');
-        if (event.type === 'response.failed' || event.type === 'error') throw providerError(0, event.response?.error?.code ?? event.code ?? event.error?.code);
+        if (event.type === 'response.failed' || event.type === 'error') {
+          const details = providerDetails(event);
+          diagnostic('provider_error', Buffer.byteLength(data), name, event.type, undefined, details);
+          throw providerError(0, details.provider_code, 'sse');
+        }
         if (event.type === 'response.incomplete') throw fail(502, 'PLAN_INCOMPLETE', '识图未完整完成，不能使用部分结果。');
-        return event.type === 'response.completed' ? { result: completedResult(event.response) } : null;
+        return event.type === 'response.completed' ? { result: completedResult(event.response,
+          details => diagnostic('completed_shape', Buffer.byteLength(data), name, event.type, undefined, details)) } : null;
       }
       function line(value) {
         if (!value) return dispatch();

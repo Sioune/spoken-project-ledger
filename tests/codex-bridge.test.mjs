@@ -15,6 +15,23 @@ import { recognizeWithPlan } from '../scripts/codex-bridge/transport.mjs';
 const scopeA = 'a'.repeat(64), scopeB = 'b'.repeat(64), model = 'gpt-offline-test';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from('OFFLINE-IMAGE-PRIVATE-BYTES-123456789')]);
+// Fetch's bad-port table in this Node runtime also applies to loopback fixtures.
+// Keep port=0 allocation, but close and reallocate if the OS chooses one of them.
+const fetchBlockedPorts = new Set([1, 7, 9, 11, 13, 15, 17, 19, 20, 21, 22, 23, 25, 37, 42, 43, 53, 69, 77, 79, 87, 95,
+  101, 102, 103, 104, 109, 110, 111, 113, 115, 117, 119, 123, 135, 137, 139, 143, 161, 179, 389, 427, 465,
+  512, 513, 514, 515, 526, 530, 531, 532, 540, 548, 554, 556, 563, 587, 601, 636, 989, 990, 993, 995,
+  1719, 1720, 1723, 2049, 3659, 4045, 4190, 5060, 5061, 6000, 6566, 6665, 6666, 6667, 6668, 6669, 6679, 6697, 10080]);
+async function listenForFetch(create) {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const bridge = create();
+    try {
+      const base = await bridge.listen();
+      if (!fetchBlockedPorts.has(Number(new URL(base).port))) return { bridge, base };
+    } catch (error) { await bridge.close(); throw error; }
+    await bridge.close();
+  }
+  throw new Error('No Fetch-compatible loopback port after eight bounded allocations');
+}
 const rawResult = () => ({ title: '本机测试活动', classification: 'reserved_event', status: 'todo', event_status: 'reserved',
   date: null, time: null, location: null, project_name: null, next_action: '请本人核对日期',
   evidence: { date_text: null, time_text: null, intent_text: '预约确认', location_text: null }, questions: ['日期缺年份'], intent_confident: true });
@@ -50,10 +67,12 @@ async function fixture(t, options = {}) {
   const temporary = temporaryDirectory();
   const identity = options.identity || fakeIdentity();
   const env = { identity, token: undefined, origin: options.origin || SITE_ORIGIN, calls: 0, dir: temporary.dir };
-  let bridge = createBridgeServer({ stateDir: temporary.dir, port: 0, identity, origin: env.origin, now: options.now,
+  let bridge;
+  t.after(async () => { await bridge?.close(); temporary.remove(); });
+  const initial = await listenForFetch(() => createBridgeServer({ stateDir: temporary.dir, port: 0, identity, origin: env.origin, now: options.now,
     recognitionTimeoutMs: options.recognitionTimeoutMs || 500,
-    recognizer: options.recognizer || (async input => { env.calls++; env.lastInput = input; return rawResult(); }) });
-  env.base = await bridge.listen();
+    recognizer: options.recognizer || (async input => { env.calls++; env.lastInput = input; return rawResult(); }) }));
+  bridge = initial.bridge; env.base = initial.base;
   Object.defineProperty(env, 'store', { get: () => bridge.store });
   env.request = async (route, { auth = true, origin = env.origin, headers: extra = {}, ...init } = {}) => {
     const headers = new Headers(extra);
@@ -84,11 +103,11 @@ async function fixture(t, options = {}) {
   };
   env.restart = async () => {
     await bridge.close();
-    bridge = createBridgeServer({ stateDir: temporary.dir, port: 0, identity, origin: env.origin, now: options.now,
-      recognizer: async input => { env.calls++; env.lastInput = input; return rawResult(); } });
-    env.base = await bridge.listen();
+    bridge = undefined;
+    const restarted = await listenForFetch(() => createBridgeServer({ stateDir: temporary.dir, port: 0, identity, origin: env.origin, now: options.now,
+      recognizer: async input => { env.calls++; env.lastInput = input; return rawResult(); } }));
+    bridge = restarted.bridge; env.base = restarted.base;
   };
-  t.after(async () => { await bridge.close(); temporary.remove(); });
   return env;
 }
 
@@ -228,6 +247,44 @@ test('单并发，先持久pending再识别；pending重放不发请求，新请
   assert.equal(env.store.quota().used, 1); assert.equal(calls, 1);
   resolveResult(rawResult()); assert.equal((await original).status, 200);
   assert.equal((await (await env.recognize({ request_id: 'cached-during-normal-use' })).json()).cached, true); assert.equal(calls, 1);
+});
+
+test('超时及时响应，但取消后的进程清理结束前仍保持单并发；迟到结果不改failed回执', { timeout: 5000 }, async t => {
+  for (const outcome of ['late-rejection', 'late-success']) {
+    await t.test(outcome, async t => {
+      let releaseCleanup, reportAborted, reportSettled, calls = 0;
+      const cleanup = new Promise(resolve => { releaseCleanup = resolve; });
+      const aborted = new Promise(resolve => { reportAborted = resolve; });
+      const settled = new Promise(resolve => { reportSettled = resolve; });
+      // Release this gate even if an assertion fails; no fake background work
+      // is allowed to leak into another test's temporary store.
+      t.after(() => releaseCleanup());
+      const env = await fixture(t, { recognitionTimeoutMs: 25, recognizer: async (_input, { signal }) => {
+        calls++;
+        if (calls > 1) return rawResult();
+        await new Promise(resolve => signal.addEventListener('abort', () => { reportAborted(); resolve(); }, { once: true }));
+        await cleanup; // Simulate a CLI process tree and original-image cleanup.
+        reportSettled();
+        if (outcome === 'late-rejection') throw new PlanError(499, 'PLAN_CANCELLED', '离线取消已完成');
+        return rawResult();
+      } });
+      await env.pair();
+      const original = env.recognize(); await aborted;
+      // The HTTP response must arrive while cleanup is deliberately blocked.
+      const timeout = await original; assert.equal(timeout.status, 504);
+      assert.equal(await code(timeout), 'RECOGNITION_TIMEOUT');
+      assert.equal(await code(await env.recognize({ request_id: 'after-timeout', note: 'new work' })), 'BRIDGE_BUSY');
+      assert.equal(await code(await env.recognize()), 'REQUEST_FAILED');
+      assert.equal(calls, 1); assert.equal(env.store.quota().used, 1);
+      assert.equal(env.store.db.prepare("SELECT COUNT(*) AS count FROM recognitions WHERE request_id = 'after-timeout'").get().count, 0);
+      releaseCleanup(); await settled;
+      const next = await env.recognize({ request_id: 'after-timeout', note: 'new work' });
+      assert.equal(next.status, 200); assert.equal(calls, 2); assert.equal(env.store.quota().used, 2);
+      const originalRecord = env.store.db.prepare("SELECT state, result_json FROM recognitions WHERE request_id = 'request-1'").get();
+      assert.equal(originalRecord.state, 'failed'); assert.equal(originalRecord.result_json, null);
+      assert.equal(await code(await env.recognize()), 'REQUEST_FAILED'); assert.equal(calls, 2);
+    });
+  }
 });
 
 test('失败与超时均占额度且同ID永不自动重调；无效结构不伪报completed', async t => {
