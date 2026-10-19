@@ -1,25 +1,37 @@
 import os from 'node:os';
 import path from 'node:path';
 import { lstatSync, realpathSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { PlanError } from './identity.mjs';
 
-// Only this official npm installation is executable. No browser, request, CLI
+// Only the fixed official Windows npm or signed Mac app installation is executable. No browser, request, CLI
 // argument, PATH lookup, or Codex configuration can select another program.
 export function createNativeRuntime() {
   if (arguments.length) throw new PlanError(400, 'CODEX_CLI_NOT_FOUND', '本机Codex路径不接受外部配置。');
   const home = os.homedir();
   const roaming = path.join(home, 'AppData', 'Roaming');
   const local = path.join(home, 'AppData', 'Local');
-  const executable = path.join(roaming, 'npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe');
+  const executable = process.platform === 'darwin'
+    ? '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex'
+    : path.join(roaming, 'npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe');
   try {
-    if (!lstatSync(executable).isFile() || realpathSync(executable).toLowerCase() !== executable.toLowerCase()) throw new Error('untrusted');
+    const resolved = realpathSync(executable);
+    if (!lstatSync(executable).isFile() || (process.platform === 'win32' ? resolved.toLowerCase() !== executable.toLowerCase() : resolved !== executable)) throw new Error('untrusted');
+    if (process.platform === 'darwin') {
+      const signature = spawnSync('/usr/bin/codesign', ['--verify', '--strict', '-R', '=anchor apple generic and certificate leaf[subject.OU] = "2DC432GLL2"', executable], { encoding: 'utf8', timeout: 10000, env: { PATH: '/usr/bin:/bin' } });
+      if (signature.status !== 0) throw new Error('untrusted');
+    }
   } catch (error) {
     // A missing installation is reported by spawn as a disconnected identity,
     // so the local portal remains usable. Existing redirected paths fail shut.
     if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw new PlanError(503, 'CODEX_CLI_NOT_FOUND', '官方本机Codex安装路径无法核验。');
   }
   const systemRoot = process.env.SystemRoot || process.env.SYSTEMROOT || 'C:\\Windows';
-  const env = {
+  const env = process.platform === 'darwin' ? {
+    HOME: home, USERPROFILE: home,
+    TMPDIR: os.tmpdir(), TEMP: os.tmpdir(), TMP: os.tmpdir(),
+    PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+  } : {
     SystemRoot: systemRoot,
     WINDIR: systemRoot,
     USERPROFILE: home,

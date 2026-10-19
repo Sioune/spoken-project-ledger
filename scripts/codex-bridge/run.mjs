@@ -8,7 +8,9 @@ import { createNativeIdentity } from './native-identity.mjs';
 import { recognizeWithCodex } from './native-transport.mjs';
 
 export async function runBridge() {
-  const stateDir = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'SpokenProjectLedgerCodex');
+  const stateDir = process.platform === 'darwin'
+    ? path.join(os.homedir(), 'Library', 'Application Support', 'SpokenProjectLedgerCodex')
+    : path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'SpokenProjectLedgerCodex');
   const store = new BridgeStore({ stateDir });
   const runtime = createNativeRuntime();
   const identity = createNativeIdentity({ runtime });

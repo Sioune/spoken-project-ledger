@@ -41,7 +41,7 @@ test('native runtime is fixed, frozen and strips provider credentials/configurat
   try {
     for (const key of keys) process.env[key] = key === 'CODEX_HOME' ? path.join(os.tmpdir(), 'official-cli-login-home') : 'must-not-be-inherited';
     const value = createNativeRuntime();
-    assert.equal(value.executable, path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'));
+    assert.equal(value.executable, process.platform === 'darwin' ? '/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex' : path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'node_modules', '@openai', 'codex', 'node_modules', '@openai', 'codex-win32-x64', 'vendor', 'x86_64-pc-windows-msvc', 'bin', 'codex.exe'));
     assert.equal(value.env.CODEX_HOME, process.env.CODEX_HOME);
     for (const key of keys.filter(key => key !== 'CODEX_HOME')) assert.equal(value.env[key], undefined);
     assert.equal(Object.isFrozen(value), true); assert.equal(Object.isFrozen(value.env), true);

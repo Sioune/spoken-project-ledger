@@ -130,3 +130,22 @@ node scripts/codex-bridge/run.mjs
 
 此前独立 OAuth 路径的3次原图尝试均失败、0次业务写入；遗留协议测试仅保留兼容回归，不是当前生产启动路径。旧公共注册信息和失败计数仍保留，不重置或迁移业务数据。
 
+
+## Mac 本机运行（2026-10-20 验证）
+
+当前工作目录：`/Users/siounex/Documents/ChatGPT/项目簿`。最初由校验过的 dce45a7 参考源码包建立；随后通过 Sites 官方 source helper 取回原仓库完整 Git 历史，当前维护分支 `codex/mac-maintenance` 基于原提交 `dce45a768517282be1f632315804f8f5ff23f69b`。原材料保留于 `.handoff/`，后续维护与发布约定见 [AGENTS.md](AGENTS.md)。
+
+本机预览：<http://127.0.0.1:5188/>。开发模拟登录：<http://127.0.0.1:5188/signin-with-chatgpt?return_to=/>。本地仅建表，未初始化六项工作、未导入正式记录；页面身份 Seedy 是开发身份。实际日常数据仍使用原私有站。
+
+本机识图桥：<http://127.0.0.1:5197/>。从此页取得一次性连接码后，在原私有站完成配对；桥只接受原站 Origin，本机5188预览不在允许范围内。网页配对和真实原图识别尚未验证，本次未调用模型。CLI ChatGPT 登录及当前7个图像模型目录只读核验成功。
+
+如需重启，分别在两个终端从本目录运行（先检查端口，保留其他目录的5186服务）：
+
+```sh
+node scripts/run-framework.mjs dev --port 5188
+node scripts/codex-bridge/run.mjs
+```
+
+本次已在后台启动，无开机自启；重启Mac后需重新运行。日志及PID在 `.sites-runtime/mac/`。桥状态位于 `~/Library/Application Support/SpokenProjectLedgerCodex`，保留防重编号与次数，不删除来重试。
+
+Mac适配沿用此前副本的官方签名CLI路径、最小环境和状态目录；补充原生传输测试的进程组终止注入边界，fake PID不会进入真实POSIX kill。类型检查、生产构建、211项离线测试通过；证据在 `.sites-runtime/mac/verification/`。浏览器已验证开发模拟登录和空库已连接页面，未点击初始化。原生正式MCP读取仍为revision41，8项目、32事项、6文件；未写生产、未发布站点。

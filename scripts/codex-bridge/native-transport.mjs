@@ -71,6 +71,9 @@ export async function recognizeWithCodex({ identity, bytes, mime_type, note = ''
   if (signal?.aborted) throw cancelled();
   const initialAccount = identity.status().account_key;
   const spawn = runtime.spawnImpl ?? nodeSpawn;
+  // Injected process fixtures must also isolate the POSIX signal boundary.
+  if (runtime.spawnImpl && typeof runtime.killProcessGroup !== 'function') throw fail(503, 'CODEX_RUNTIME', '测试进程边界未隔离。');
+  const killProcessGroup = runtime.spawnImpl ? runtime.killProcessGroup : process.kill.bind(process);
   const temporaryRoot = path.resolve(tmpdir());
   let directory, child, timer, removeAbort, stopPromise, preparation;
   let timedOut = false, stopped = false;
@@ -91,7 +94,7 @@ export async function recognizeWithCodex({ identity, bytes, mime_type, note = ''
           });
         } catch { /* The child handle below remains a final local kill fallback. */ }
       } else {
-        try { process.kill(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
+        try { killProcessGroup(-child.pid, 'SIGKILL'); } catch { try { child.kill('SIGKILL'); } catch {} }
       }
       // Fallback only, never a fresh recognition or an automatic retry.
       if (child.exitCode === null || child.exitCode === undefined) { try { child.kill('SIGKILL'); } catch {} }

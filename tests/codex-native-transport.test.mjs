@@ -42,7 +42,11 @@ function fixture(options = {}) {
     children.push(child); return child;
   };
   const input = { identity, bytes: png, mime_type: 'image/png', note: '只理解预约事实', projects: [{ id: 'PRIVATE_PROJECT_ID', name: '个人安排', secret: 'PRIVATE_PROJECT_SECRET' }], model: 'unit-model', ...options.input };
-  const runtime = { executable: path.resolve('unit', 'codex.exe'), env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows', TEMP: 'unit-temp', USERPROFILE: 'unit-home' }, spawnImpl, ...options.runtime };
+  const runtime = { executable: path.resolve('unit', 'codex.exe'), env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows', TEMP: 'unit-temp', USERPROFILE: 'unit-home' }, spawnImpl, killProcessGroup: (pid, signal) => {
+    const child = children.find(value => value.pid === -pid);
+    assert.ok(child, 'only the fixture process group may be terminated');
+    child.kill(signal);
+  }, ...options.runtime };
   return { input, runtime, calls, children, directories, reads, switchAccount: () => { account = 'different-account'; } };
 }
 const assertClean = f => { for (const directory of f.directories) assert.equal(existsSync(directory), false, 'temporary image/schema directory must be removed'); };
