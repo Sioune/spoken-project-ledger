@@ -5,7 +5,14 @@ import {Miniflare} from 'miniflare';
 import ts from 'typescript';
 const build=path.resolve('.sites-runtime/backup-testbuild');fs.mkdirSync(build,{recursive:true});
 for(const n of ['model','d1-backup'])fs.writeFileSync(path.join(build,n+'.mjs'),ts.transpileModule(fs.readFileSync('lib/'+n+'.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText.replace("'./model'","'./model.mjs'"));
-const {exportD1Snapshot}=await import(new URL('../.sites-runtime/backup-testbuild/d1-backup.mjs',import.meta.url));
+const {exportD1Snapshot,assertBackupRequest}=await import(new URL('../.sites-runtime/backup-testbuild/d1-backup.mjs',import.meta.url));
+const url='https://private.example/api/d1-backup';
+assert.doesNotThrow(()=>assertBackupRequest(new Request(url,{headers:{'x-ledger-backup':'download'}})));
+assert.doesNotThrow(()=>assertBackupRequest(new Request(url,{headers:{'x-ledger-backup':'download','origin':'https://private.example','sec-fetch-site':'same-origin'}})));
+assert.throws(()=>assertBackupRequest(new Request(url)),e=>e.status===403);
+assert.throws(()=>assertBackupRequest(new Request(url,{headers:{'x-ledger-backup':'download','origin':'https://evil.example'}})),e=>e.status===403);
+assert.throws(()=>assertBackupRequest(new Request(url,{headers:{'x-ledger-backup':'download','sec-fetch-site':'cross-site'}})),e=>e.status===403);
+assert.throws(()=>assertBackupRequest(new Request(url,{method:'OPTIONS',headers:{'x-ledger-backup':'download'}})),e=>e.status===403);
 const mf=new Miniflare({modules:true,script:'export default { fetch(){return new Response("isolated")} }',compatibilityDate:'2026-05-15',d1Databases:{DB:'00000000-0000-4000-8000-000000000000'}});
 try{
  const db=await mf.getD1Database('DB');

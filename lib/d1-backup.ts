@@ -14,6 +14,14 @@ function union(parts:string[]):string {while(parts.length>5){const next:string[]
 const bad=()=>new AppError(503,'BACKUP_INCOMPLETE','备份未完整生成，未返回数据。');
 const schemaSQL="SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name,tbl_name";
 
+// A custom header cannot be sent cross-origin by a browser without CORS
+// preflight. The API never grants CORS and the snapshot also checks ownership.
+export function assertBackupRequest(request:Request){
+ const origin=request.headers.get('origin');
+ const site=request.headers.get('sec-fetch-site');
+ if(request.method!=='GET'||request.headers.get('x-ledger-backup')!=='download'||(origin&&origin!==new URL(request.url).origin)||(site&&site!=='same-origin'&&site!=='none'))throw new AppError(403,'ORIGIN','备份只能由本人站内下载');
+}
+
 // Export is intentionally fail-closed: unsupported schemas must be reviewed
 // before their data can be captured and restored correctly.
 export async function exportD1Snapshot(db:Database,owner:string){
