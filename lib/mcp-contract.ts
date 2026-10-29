@@ -25,7 +25,7 @@ export const ledgerCommitInputSchema={
  type:'object',properties:{
   operation_id:{type:'string'},idempotency_key:{type:'string'},source_event_id:{type:'string'},base_version:{type:'integer'},occurred_at:{type:'string'},raw_text:{type:'string'},
   changes:{type:'array',items:{type:'object',properties:{type:{type:'string',enum:['create','update','project','settings','document','pending']},id:{type:'string'},values:changeValuesSchema},required:['type','values'],additionalProperties:false}},
-  confirmed:{type:'boolean'}
+  confirmed:{type:'boolean',description:'显式 false 表示尚未确认并拒绝提交；省略保留既有直接授权调用方式。'}
  },required:['operation_id','idempotency_key','source_event_id','base_version','occurred_at','raw_text','changes'],additionalProperties:false
 };
 export function mcpCommitPayload(args:unknown,jsonMode=false):Record<string,unknown>{
@@ -36,5 +36,6 @@ export function mcpCommitPayload(args:unknown,jsonMode=false):Record<string,unkn
  if(Object.keys(input).some(k=>!top.includes(k)))throw new AppError(400,'FIELD','提交包含未公开字段');
  if(!Array.isArray(input.changes))throw new AppError(400,'CHANGES','changes必须为数组');
  for(const change of input.changes){if(!change||typeof change!=='object'||Array.isArray(change)||Object.keys(change).some(k=>!['type','id','values'].includes(k))||!['create','update','project','settings','document','pending'].includes(change.type))throw new AppError(400,'CHANGE','MCP提交的变更类型或字段无效');if(!change.values||typeof change.values!=='object'||Array.isArray(change.values)||Object.keys(change.values).some(k=>!fields.includes(k)))throw new AppError(400,'FIELD','变更包含未公开字段');}
- if(input.confirmed!==undefined&&typeof input.confirmed!=='boolean')throw new AppError(400,'CONFIRM','confirmed必须为布尔值');return input;
+ if(input.confirmed!==undefined&&typeof input.confirmed!=='boolean')throw new AppError(400,'CONFIRM','confirmed必须为布尔值');
+ if(input.confirmed===false)throw new AppError(400,'CONFIRM','尚未确认变更，请核对后再提交');return input;
 }

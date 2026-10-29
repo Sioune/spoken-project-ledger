@@ -13,7 +13,8 @@ const auth=moduleURL(`export async function getChatGPTUser(){return globalThis._
 const account=moduleURL(`export async function ensureAccount(){globalThis.__registrations++}`);
 const worker=moduleURL(`export const env={DB:{}}`);
 const intake=moduleURL(`export async function handleIntake(){globalThis.__writes++;return Response.json({ok:true})}`);
-const source=compile('lib/api.ts').replace("'cloudflare:workers'",JSON.stringify(worker)).replace("'@/app/chatgpt-auth'",JSON.stringify(auth)).replace("'./repository'",JSON.stringify(repo)).replace("'./model'",JSON.stringify(model)).replace("'./account'",JSON.stringify(account)).replace("'./account-scope'",JSON.stringify(scopeMod)).replace("'./intake-api'",JSON.stringify(intake));
+const backup=moduleURL(`export function assertAccountBackupRequest(){} export async function exportAccountSnapshot(){return {}}`);
+const source=compile('lib/api.ts').replace("'cloudflare:workers'",JSON.stringify(worker)).replace("'@/app/chatgpt-auth'",JSON.stringify(auth)).replace("'./repository'",JSON.stringify(repo)).replace("'./model'",JSON.stringify(model)).replace("'./account'",JSON.stringify(account)).replace("'./account-scope'",JSON.stringify(scopeMod)).replace("'./intake-api'",JSON.stringify(intake)).replace("'./account-backup'",JSON.stringify(backup));
 const {api,action}=await import(moduleURL(source));
 const {accountScope}=await import(scopeMod);
 

@@ -28,8 +28,8 @@ try{
  }};
  const bundled=await build({entryPoints:['lib/api.ts'],bundle:true,write:false,platform:'node',format:'esm',alias:{'@':process.cwd()},plugins:[replacement]});
  const {api,action}=await import('data:text/javascript;base64,'+Buffer.from(bundled.outputFiles[0].text).toString('base64'));
- async function call(who,method,route,{scope,body}={}){
-  const headers={};if(scope!==undefined)headers['X-Ledger-Account-Scope']=scope;if(body!==undefined)headers['Content-Type']='application/json';
+ async function call(who,method,route,{scope,body,backup,origin}={}){
+  const headers={};if(scope!==undefined)headers['X-Ledger-Account-Scope']=scope;if(body!==undefined)headers['Content-Type']='application/json';if(backup)headers['X-Ledger-Backup']='download';if(origin)headers.Origin=origin;
   const request=new Request('https://fixture.invalid/api/'+route,{method,headers,...(body!==undefined?{body:JSON.stringify(body)}:{})});
   const user=who?{userId:who,displayName:who,email:who+'@fixture.invalid'}:null;
   return auth.run(user,async()=>{const response=await api(request,route.split('/'));const type=response.headers.get('content-type')||'';return {status:response.status,body:type.includes('application/json')?await response.json():await response.arrayBuffer()}});
@@ -50,6 +50,17 @@ try{
  assert.equal(ar.status,200,JSON.stringify(ar.body));assert.equal(br.status,200,JSON.stringify(br.body));assert.equal(ar.body.state,'verified');assert.equal(br.body.state,'verified');
  const [afterA,afterB]=await Promise.all([call(owner,'GET','state'),call(visitor,'GET','state')]);assert.equal(afterA.body.revision,6);assert.equal(afterB.body.revision,2);assert.equal(afterA.body.data.projects.find(p=>p.id==='same-project').name,'A 的项目');assert.equal(afterB.body.data.projects.find(p=>p.id==='same-project').name,'B 的项目');
  assert.equal((await call(owner,'GET','operations/same-op',{scope:a})).body.after.projects.find(p=>p.id==='same-project').name,'A 的项目');assert.equal((await call(visitor,'GET','operations/same-op',{scope:b})).body.after.projects.find(p=>p.id==='same-project').name,'B 的项目');
+ assert.equal((await call(owner,'GET','account-backup',{scope:a})).status,403);
+ assert.equal((await call(owner,'GET','account-backup',{scope:b,backup:true})).status,409);
+ assert.equal((await call(owner,'GET','account-backup',{scope:a,backup:true,origin:'https://other.invalid'})).status,403);
+ assert.equal((await call(null,'GET','account-backup',{scope:a,backup:true})).status,401);
+ const [backupA,backupB]=await Promise.all([call(owner,'GET','account-backup',{scope:a,backup:true}),call(visitor,'GET','account-backup',{scope:b,backup:true})]);
+ assert.equal(backupA.status,200);assert.equal(backupB.status,200);
+ assert.equal(backupA.body.scope,'authenticated-account');assert.equal(backupB.body.scope,'authenticated-account');
+ assert.equal(backupA.body.row_counts.accounts,1);assert.equal(backupB.body.row_counts.accounts,1);
+ assert.equal(backupA.body.row_counts.images,1);assert.equal(backupB.body.row_counts.images,0);
+ const accountId=backup=>Buffer.from(backup.body.tables.accounts.rows[0][0].hex,'hex').toString('utf8');
+ assert.equal(accountId(backupA),owner);assert.equal(accountId(backupB),visitor);
  const [race1,race2]=await Promise.all([call(visitor,'POST','operations',{scope:b,body:{...make('并发 B 一',2),operation_id:'b-race-1',idempotency_key:'b-key-1',source_event_id:'b-source-1'}}),call(visitor,'POST','operations',{scope:b,body:{...make('并发 B 二',2),operation_id:'b-race-2',idempotency_key:'b-key-2',source_event_id:'b-source-2'}})]);
  assert.deepEqual([race1.status,race2.status].sort(),[200,409]);
  assert.equal((await call(null,'GET','state')).status,401);
