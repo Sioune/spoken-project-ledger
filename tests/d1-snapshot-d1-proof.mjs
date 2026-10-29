@@ -7,7 +7,7 @@ import {Miniflare} from 'miniflare';
 
 // All content is generated fixture data and the database is a fresh local D1.
 const temp=fs.mkdtempSync(path.join(os.tmpdir(),'ledger-snapshot-d1-'));
-const fixtureScript=`import importlib.util,json,sys\nfrom pathlib import Path\ns=importlib.util.spec_from_file_location('fixture',Path('tests/d1-snapshot-restore.test.py'))\nm=importlib.util.module_from_spec(s);s.loader.exec_module(m)\nx=m.fixture()\nr=next(i for i,c in enumerate(x['tables']['operations']['columns']) if c['name']=='receipt')\nb=next(i for i,c in enumerate(x['tables']['images']['columns']) if c['name']=='bytes')\nx['tables']['operations']['rows'][0][r]['hex']='007bff7d'*40000\nx['tables']['images']['rows'][0][b]['hex']='00ff017f'*50000\nPath(sys.argv[1]).write_text(json.dumps(x))\nm.mod.restore(x,sys.argv[2])\nm.mod.write_d1_sql(x,sys.argv[3])\n`;
+const fixtureScript=`import importlib.util,json,sys\nfrom pathlib import Path\ns=importlib.util.spec_from_file_location('fixture',Path('tests/d1-snapshot-restore.test.py'))\nm=importlib.util.module_from_spec(s);s.loader.exec_module(m)\nx=m.fixture(with_metadata=True)\nr=next(i for i,c in enumerate(x['tables']['operations']['columns']) if c['name']=='receipt')\nb=next(i for i,c in enumerate(x['tables']['images']['columns']) if c['name']=='bytes')\nx['tables']['operations']['rows'][0][r]['hex']='007bff7d'*40000\nx['tables']['images']['rows'][0][b]['hex']='00ff017f'*50000\nPath(sys.argv[1]).write_text(json.dumps(x))\nm.mod.restore(x,sys.argv[2])\nm.mod.write_d1_sql(x,sys.argv[3])\n`;
 let mf;
 try {
  const snapshotPath=path.join(temp,'snapshot.json');
@@ -18,8 +18,9 @@ try {
  const db=await mf.getD1Database('DB');
  // Trusted generated baseline has no semicolons in literals or triggers.
  for(const stmt of fs.readFileSync(sqlPath,'utf8').split(';').filter(s=>s.trim())) await db.prepare(stmt).run();
- const master=(await db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name").all()).results;
- const expectedSchema=snapshot.schema.filter(s=>!s.name.startsWith('sqlite_')&&!s.name.startsWith('_cf_')).sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name));
+ const master=(await db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT GLOB '_cf_*' ORDER BY type,name").all()).results;
+ const cmp=(a,b)=>a<b?-1:a>b?1:0;
+ const expectedSchema=snapshot.schema.filter(s=>!s.name.startsWith('_cf_')).sort((a,b)=>cmp(a.type,b.type)||cmp(a.name,b.name));
  assert.deepEqual(master,expectedSchema);
  for(const [table, data] of Object.entries(snapshot.tables)){
   const parts=data.columns.flatMap(({name})=>{let q='"'+name.replaceAll('"','""')+'"';return [`typeof(${q})`,`CASE typeof(${q}) WHEN 'null' THEN NULL WHEN 'integer' THEN CAST(${q} AS TEXT) WHEN 'real' THEN printf('%!.17g', ${q}) ELSE lower(hex(CAST(${q} AS BLOB))) END`];});
@@ -32,6 +33,7 @@ try {
  const check=(await db.prepare('PRAGMA quick_check').all()).results;
  assert.deepEqual(Object.values(check[0]),['ok']);
  assert.equal((await db.prepare('PRAGMA foreign_key_check').all()).results.length,0);
+ assert.deepEqual((await db.prepare('SELECT name,seq FROM sqlite_sequence').all()).results,[{name:'__appgarden_migrations',seq:42}]);
  console.log(JSON.stringify({status:'verified',runtime:'isolated Miniflare D1',schema:true,allCells:true,quickCheck:true,foreignKeyCheck:true}));
 } finally {
  if(mf) await mf.dispose();

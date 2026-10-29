@@ -12,18 +12,25 @@ mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 
 
-def fixture():
+def fixture(with_metadata=False):
     db = sqlite3.connect(':memory:')
-    mod.baseline(db)
+    mod.baseline(db, with_metadata)
     db.execute("INSERT INTO ledgers VALUES(1,'owner',9223372036854775807,CAST(X'00FFAB' AS TEXT),'op')")
     db.execute("INSERT INTO operations VALUES('op','owner','key','source','hash','{}','now')")
     db.execute("INSERT INTO images VALUES('image','owner','hash','image/png',4,'now',X'00FF01FE')")
     # REAL roundtrip in an integer-affinity column deliberately exercises type fidelity.
     db.execute("INSERT INTO ledgers VALUES(2,'other',0.125,'{}','op')")
+    if with_metadata:
+        db.execute("INSERT INTO __appgarden_migrations(id,name,applied_at) VALUES (1,'0000.sql','2026-10-01')")
+        db.execute("INSERT INTO __appgarden_migrations(id,name,applied_at) VALUES (2,'0001.sql','2026-10-02')")
+        # Preserve a high-water mark larger than MAX(id), which must not be
+        # inferred from the rows on restore.
+        db.execute("UPDATE sqlite_sequence SET seq=42 WHERE name='__appgarden_migrations'")
     snapshot = {'format': 'd1-logical-snapshot-v1', 'captured_at': '2026-10-29T00:00:00Z', 'complete': True,
                 'schema': [dict(zip(('type','name','tbl_name','sql'), r)) for r in mod.schema(db)],
                 'tables': {}, 'row_counts': {}}
-    for table in sorted(mod.TABLES):
+    selected=mod.TABLES | mod.META_TABLES if with_metadata else mod.TABLES
+    for table in sorted(selected):
         cols = [{'name':r[1], 'pk':r[5], 'hidden':r[6]} for r in db.execute('PRAGMA table_xinfo("'+table+'")')]
         parts=[]
         for c in cols:
@@ -66,6 +73,34 @@ class RestoreTest(unittest.TestCase):
         Path(self.out).write_bytes(b'preserve')
         with self.assertRaises(FileExistsError): mod.restore(self.data,self.out)
         self.assertEqual(Path(self.out).read_bytes(),b'preserve')
+
+    def test_sites_migrations_and_exact_sequence_are_restored_and_verified(self):
+        data=fixture(with_metadata=True)
+        counts=mod.restore(data,self.out)
+        self.assertEqual(counts['__appgarden_migrations'],2)
+        self.assertEqual(counts['sqlite_sequence'],1)
+        db=sqlite3.connect(self.out)
+        self.assertEqual(db.execute('SELECT id,name,applied_at FROM __appgarden_migrations ORDER BY id').fetchall(),[(1,'0000.sql','2026-10-01'),(2,'0001.sql','2026-10-02')])
+        self.assertEqual(db.execute("SELECT name,seq FROM sqlite_sequence").fetchall(),[('__appgarden_migrations',42)])
+        self.assertIsNotNone(db.execute("SELECT name FROM sqlite_schema WHERE name='sqlite_autoindex___appgarden_migrations_1'").fetchone())
+        sql_path=str(Path(self.temp.name)/'with-migrations.sql');mod.write_d1_sql(data,sql_path)
+        replay=sqlite3.connect(':memory:');replay.executescript(Path(sql_path).read_text())
+        self.assertEqual(mod.schema(db),mod.schema(replay))
+        for name in sorted(mod.TABLES | mod.META_TABLES):
+            cols=[c['name'] for c in data['tables'][name]['columns']]
+            self.assertEqual(mod.observed_cells(db,name,cols),mod.observed_cells(replay,name,cols))
+        db.close();replay.close()
+
+    def test_sites_metadata_or_sequence_tampering_fails_closed(self):
+        examples=[]
+        a=fixture(with_metadata=True);del a['tables']['sqlite_sequence'];del a['row_counts']['sqlite_sequence'];examples.append(a)
+        a=fixture(with_metadata=True);a['schema']=[r for r in a['schema'] if r['name']!='sqlite_autoindex___appgarden_migrations_1'];examples.append(a)
+        a=fixture(with_metadata=True);next(r for r in a['schema'] if r['name']=='__appgarden_migrations')['sql']+='; DROP TABLE ledgers';examples.append(a)
+        a=fixture(with_metadata=True);a['row_counts']['sqlite_sequence']=0;examples.append(a)
+        for bad in examples:
+            with self.subTest():
+                with self.assertRaises(ValueError):mod.restore(bad,self.out)
+                self.assertFalse(Path(self.out).exists())
 
     def test_incomplete_or_changed_schema_rejected_without_output(self):
         examples=[]

@@ -41,7 +41,7 @@ export async function exportD1Snapshot(db:Database,owner:string){
   if(typeof definition==='string'&&definition.length<=2048)inventory.definitions[name]=definition;
  }
  stage='COLUMN_READ';
- for(const entry of pre.filter(x=>x.type==='table'&&!x.name.startsWith('_cf_')&&!x.name.startsWith('sqlite_'))){
+ for(const entry of pre.filter(x=>x.type==='table'&&!x.name.startsWith('_cf_')&&(!x.name.startsWith('sqlite_')||x.name==='sqlite_sequence'))){
   const name=safeName(entry.name);if(name==='[invalid]')throw bad();
   const found=(await db.prepare(`PRAGMA table_xinfo(${ident(name)})`).all<Col>()).results;
   if(!Array.isArray(found)||found.length>100)throw bad();
@@ -54,14 +54,24 @@ export async function exportD1Snapshot(db:Database,owner:string){
  const tables=pre.filter(x=>x.type==='table'&&!systemTables.has(x.name)&&!x.name.startsWith('sqlite_')).map(x=>x.name);
  if(pre.some(x=>!['table','index'].includes(x.type)))throw bad();
  const required=['ledgers','operations','images','image_recognitions'];
- const allowed=new Set(required);
+ const allowed=new Set([...required,'__appgarden_migrations']);
  if(required.some(x=>!tables.includes(x))||tables.some(x=>!allowed.has(x))||new Set(tables).size!==tables.length)throw bad();
- if(pre.some(x=>x.type==='table'&&x.name.startsWith('sqlite_')))throw bad();
+ if(pre.some(x=>x.type==='table'&&x.name.startsWith('sqlite_')&&x.name!=='sqlite_sequence'))throw bad();
+ const hasMigrations=tables.includes('__appgarden_migrations');
+ const hasSequence=pre.some(x=>x.type==='table'&&x.name==='sqlite_sequence');
+ if(hasMigrations!==hasSequence)throw bad();
+ if(hasMigrations){
+  if(pre.find(x=>x.type==='table'&&x.name==='__appgarden_migrations')?.sql!=='CREATE TABLE "__appgarden_migrations"(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE,applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)')throw bad();
+  if(pre.find(x=>x.type==='table'&&x.name==='sqlite_sequence')?.sql!=='CREATE TABLE sqlite_sequence(name,seq)')throw bad();
+  if(!pre.some(x=>x.type==='index'&&x.name==='sqlite_autoindex___appgarden_migrations_1'&&x.tbl_name==='__appgarden_migrations'&&x.sql===null))throw bad();
+  tables.push('sqlite_sequence');
+ }
  tables.sort();
  const columns:Record<string,Col[]>={};
- const expectedColumns:Record<string,string[]>={ledgers:['id','owner_id','revision','data','last_operation'],operations:['id','owner_id','idempotency_key','source_event_id','payload_hash','receipt','created_at'],images:['id','owner_id','sha256','mime_type','byte_size','uploaded_at','bytes'],image_recognitions:['id','owner_id','fingerprint','state','result_json','error_code','created_at','finished_at']};
+ const expectedColumns:Record<string,string[]>={ledgers:['id','owner_id','revision','data','last_operation'],operations:['id','owner_id','idempotency_key','source_event_id','payload_hash','receipt','created_at'],images:['id','owner_id','sha256','mime_type','byte_size','uploaded_at','bytes'],image_recognitions:['id','owner_id','fingerprint','state','result_json','error_code','created_at','finished_at'],__appgarden_migrations:['id','name','applied_at'],sqlite_sequence:['name','seq']};
  const allowedIndexes=new Set(['owner_key','owner_source','recognitions_owner_created','recognitions_owner_fingerprint','images_owner_hash']);
- if(pre.some(s=>s.type==='index'&&!s.name.startsWith('sqlite_autoindex_')&&!allowedIndexes.has(s.name)))throw bad();
+ const allowedAutoIndexes=new Set(['sqlite_autoindex_operations_1','sqlite_autoindex_images_1','sqlite_autoindex_image_recognitions_1','sqlite_autoindex___appgarden_migrations_1']);
+ if(pre.some(s=>s.type==='index'&&!allowedAutoIndexes.has(s.name)&&!allowedIndexes.has(s.name)))throw bad();
  for(const table of tables){
   const cols=(await db.prepare(`PRAGMA table_xinfo(${ident(table)})`).all<Col>()).results;
   if(!cols.length||cols.length>100||cols.some(c=>c.hidden!==0||!/^\w+$/.test(c.name)))throw bad();

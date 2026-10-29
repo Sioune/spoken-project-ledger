@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Restore a verified snapshot to a NEW local SQLite file only.
 
-This intentionally accepts only the four-table schema defined by this
-checkout's 0000/0001 migrations. Unknown schema is an error, not executable
-input. The D1 platform's reserved _cf_* tables is outside this logical backup.
+This accepts the four application tables and, when present, the independently
+verified Sites migration metadata and SQLite sequence. Unknown schema is an
+error, not executable input. D1's reserved platform tables are excluded.
 """
 import argparse
 import collections
@@ -18,6 +18,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MIGRATIONS = ('0000_outstanding_ultimatum.sql', '0001_sharp_yellowjacket.sql')
 TABLES = frozenset(('ledgers', 'operations', 'images', 'image_recognitions'))
+META_TABLES = frozenset(('__appgarden_migrations', 'sqlite_sequence'))
+# The exact Sites-owned table definition was read from the production schema;
+# it is trusted code, not a SQL statement taken from the snapshot at runtime.
+APPGARDEN_SQL = 'CREATE TABLE "__appgarden_migrations"(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE,applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)'
 INTEGER = re.compile(r'(?:0|-[1-9][0-9]*|[1-9][0-9]*)\Z')
 HEX = re.compile(r'(?:[0-9a-fA-F]{2})*\Z')
 
@@ -35,9 +39,21 @@ def no_duplicate_keys(pairs):
     return result
 
 
-def baseline(connection):
+def baseline(connection, with_metadata=False):
     for filename in MIGRATIONS:
         connection.executescript((ROOT / 'drizzle' / filename).read_text(encoding='utf-8'))
+    if with_metadata:
+        connection.execute(APPGARDEN_SQL)
+
+
+def snapshot_tables(snapshot):
+    tables, counts = snapshot.get('tables'), snapshot.get('row_counts')
+    if not isinstance(tables, dict) or not isinstance(counts, dict) or set(tables) != set(counts):
+        fail('snapshot table set incomplete or unsupported')
+    selected = frozenset(tables)
+    if selected not in (TABLES, TABLES | META_TABLES):
+        fail('snapshot table set incomplete or unsupported')
+    return selected
 
 
 def schema(connection):
@@ -66,7 +82,7 @@ def verify_schema(records, trusted):
         if not all(isinstance(v, str) for v in (typ, name, table)) or not (sql is None or isinstance(sql, str)):
             fail('malformed schema values')
         if table.startswith('_cf_'):
-            if not (typ == 'table' and name == table):
+            if not (typ == 'table' and name == table and name in ('_cf_KV', '_cf_METADATA')):
                 fail('unsupported platform schema object')
             continue
         key = (typ, name, table)
@@ -136,16 +152,15 @@ def restore(snapshot, output):
         fail('snapshot format or completeness marker invalid')
     if not isinstance(snapshot.get('captured_at'), str) or not snapshot['captured_at']:
         fail('capture timestamp missing')
-    tables = snapshot.get('tables')
-    counts = snapshot.get('row_counts')
-    if not isinstance(tables, dict) or set(tables) != TABLES or not isinstance(counts, dict) or set(counts) != TABLES:
-        fail('snapshot table set incomplete or unsupported')
+    selected = snapshot_tables(snapshot)
+    tables, counts = snapshot['tables'], snapshot['row_counts']
+    with_metadata = META_TABLES.issubset(selected)
     trusted = sqlite3.connect(':memory:')
     try:
-        baseline(trusted)
+        baseline(trusted, with_metadata)
         verify_schema(snapshot.get('schema'), schema(trusted))
         specs = {}
-        for name in sorted(TABLES):
+        for name in sorted(selected):
             table = tables[name]
             if not isinstance(table, dict) or set(table) != {'columns', 'rows'} or not isinstance(table['rows'], list):
                 fail('malformed table')
@@ -170,9 +185,13 @@ def restore(snapshot, output):
         try:
             db.execute('PRAGMA trusted_schema=OFF')
             db.execute('PRAGMA foreign_keys=ON')
-            baseline(db)
+            baseline(db, with_metadata)
             db.execute('BEGIN')
-            for name in sorted(TABLES):
+            for name in sorted(selected, key=lambda n: (n == 'sqlite_sequence', n)):
+                # Explicit inserts into an AUTOINCREMENT table advance SQLite's
+                # sequence. Restore the captured sequence only after those rows.
+                if name == 'sqlite_sequence':
+                    db.execute('DELETE FROM sqlite_sequence')
                 cols = specs[name]
                 quoted = ','.join('"' + c['name'].replace('"', '""') + '"' for c in cols)
                 for row in tables[name]['rows']:
@@ -186,12 +205,12 @@ def restore(snapshot, output):
                 fail('foreign key check failed')
             baseline_db = sqlite3.connect(':memory:')
             try:
-                baseline(baseline_db)
+                baseline(baseline_db, with_metadata)
                 if schema(db) != schema(baseline_db):
                     fail('restored schema/index/trigger mismatch')
             finally:
                 baseline_db.close()
-            for name in sorted(TABLES):
+            for name in sorted(selected):
                 expected = collections.Counter(tuple(value_key(cell) for cell in row) for row in tables[name]['rows'])
                 if observed_cells(db, name, [c['name'] for c in specs[name]]) != expected:
                     fail('restored cells differ in type or value')
@@ -203,7 +222,7 @@ def restore(snapshot, output):
         except OSError:
             pass
         raise
-    return {name: counts[name] for name in sorted(TABLES)}
+    return {name: counts[name] for name in sorted(selected)}
 
 
 def write_d1_sql(snapshot, output):
@@ -213,11 +232,12 @@ def write_d1_sql(snapshot, output):
     own transaction. Known non-key large TEXT/BLOB columns are restored in
     bounded byte chunks. Unknown oversized statements fail closed.
     """
+    selected = snapshot_tables(snapshot)
     temp = sqlite3.connect(':memory:')
     try:
-        baseline(temp)
+        baseline(temp, META_TABLES.issubset(selected))
         rows = schema(temp)
-        tables_sql = [sql for typ, name, _, sql in rows if typ == 'table' and sql is not None]
+        tables_sql = [sql for typ, name, _, sql in rows if typ == 'table' and name != 'sqlite_sequence' and sql is not None]
         other_sql = [sql for typ, name, _, sql in rows if typ in ('index', 'view', 'trigger') and sql is not None]
     finally:
         temp.close()
@@ -239,12 +259,14 @@ def write_d1_sql(snapshot, output):
             return "CAST(X'" + cell['hex'] + "' AS TEXT)"
         return "X'" + cell['hex'] + "'"
 
-    for name in sorted(TABLES):
+    for name in sorted(selected, key=lambda n: (n == 'sqlite_sequence', n)):
         table = snapshot['tables'][name]
         names = [c['name'] for c in table['columns']]
         columns = ','.join('"' + c.replace('"', '""') + '"' for c in names)
+        if name == 'sqlite_sequence':
+            statements.append('DELETE FROM sqlite_sequence')
         for row in table['rows']:
-            row_id = literal(row[names.index('id')])
+            row_id = literal(row[names.index('id')]) if 'id' in names else None
             cells = []
             updates = []
             for column, cell in zip(names, row):

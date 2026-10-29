@@ -23,17 +23,43 @@ try{
   if(Buffer.byteLength(stmt)>100000)throw new Error('D1 statement too large');
   await db.prepare(stmt).run();
  }
- const master=(await db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY type,name").all()).results;
- const expectedSchema=data.schema.filter(s=>!s.name.startsWith('sqlite_')&&!s.name.startsWith('_cf_')).sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name));
+ const reserved=new Set(['_cf_KV','_cf_METADATA']);
+ if(data.schema.some(s=>s.name.startsWith('_cf_')&&!reserved.has(s.name)))throw new Error('Unknown platform object');
+ const master=(await db.prepare("SELECT type,name,tbl_name,sql FROM sqlite_master WHERE name NOT GLOB '_cf_*' ORDER BY type,name").all()).results;
+ const cmp=(a,b)=>a<b?-1:a>b?1:0;
+ const expectedSchema=data.schema.filter(s=>!reserved.has(s.name)).sort((a,b)=>cmp(a.type,b.type)||cmp(a.name,b.name));
  assert.deepEqual(master,expectedSchema,'schema and indexes');
  for(const [table,contents] of Object.entries(data.tables)){
-  if(!['ledgers','operations','images','image_recognitions'].includes(table))throw new Error('Unknown table');
+  if(!['ledgers','operations','images','image_recognitions','__appgarden_migrations','sqlite_sequence'].includes(table))throw new Error('Unknown table');
   if(data.row_counts[table]!==contents.rows.length)throw new Error('Row count mismatch');
   const qname=s=>'"'+s.replaceAll('"','""')+'"';
-  const parts=contents.columns.flatMap(({name})=>{let q=qname(name);return [`typeof(${q})`,`CASE typeof(${q}) WHEN 'null' THEN NULL WHEN 'integer' THEN CAST(${q} AS TEXT) WHEN 'real' THEN printf('%!.17g', ${q}) ELSE lower(hex(CAST(${q} AS BLOB))) END`];});
-  const result=await db.prepare(`SELECT ${parts.map((p,i)=>`${p} AS c${i}`).join(',')} FROM ${qname(table)}`).all();
+  // Select only types/lengths first. hex() of a 1.5 MB BLOB would itself
+  // exceed D1's 2 MB single-value limit; read bytes in bounded chunks instead.
+  const parts=contents.columns.flatMap(({name})=>{let q=qname(name);return [`typeof(${q})`,`CASE typeof(${q}) WHEN 'integer' THEN CAST(${q} AS TEXT) WHEN 'real' THEN printf('%!.17g', ${q}) ELSE NULL END`,`CASE WHEN typeof(${q}) IN ('text','blob') THEN length(CAST(${q} AS BLOB)) ELSE 0 END`];});
+  const result=await db.prepare(`SELECT CAST(rowid AS TEXT) AS rowid_text,${parts.map((p,i)=>`${p} AS c${i}`).join(',')} FROM ${qname(table)}`).all();
   const canonical=a=>a.map(row=>JSON.stringify(row)).sort();
-  const actual=result.results.map(row=>contents.columns.map((_,i)=>[row[`c${2*i}`],row[`c${2*i+1}`]]));
+  const actual=[];
+  for(const row of result.results){
+   const cells=[];
+   for(let i=0;i<contents.columns.length;i++){
+    const type=row[`c${3*i}`],scalar=row[`c${3*i+1}`],length=row[`c${3*i+2}`];
+    if(type==='text'||type==='blob'){
+     if(!Number.isSafeInteger(length)||length<0||length>2000000)throw new Error('Invalid value length');
+     let hex='';
+     for(let offset=0;offset<length;offset+=250000){
+      const col=qname(contents.columns[i].name);
+      const fragment=await db.prepare(`SELECT lower(hex(substr(CAST(${col} AS BLOB),?,?))) AS hex FROM ${qname(table)} WHERE rowid=CAST(? AS INTEGER)`).bind(offset+1,250000,row.rowid_text).first();
+      if(typeof fragment?.hex!=='string'||!/^(?:[0-9a-f]{2})*$/.test(fragment.hex))throw new Error('Incomplete value fragment');
+      hex+=fragment.hex;
+     }
+     if(hex.length!==length*2)throw new Error('Incomplete value bytes');
+     cells.push([type,hex]);
+    }else if(type==='integer'||type==='real')cells.push([type,scalar]);
+    else if(type==='null')cells.push([type,null]);
+    else throw new Error('Unsupported value type');
+   }
+   actual.push(cells);
+  }
   const expected=contents.rows.map(row=>row.map(c=>[c.type,c.type==='null'?null:(c.hex?.toLowerCase()??c.value)]));
   assert.deepEqual(canonical(actual),canonical(expected),`cells in ${table}`);
  }

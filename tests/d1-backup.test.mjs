@@ -39,8 +39,15 @@ try{
  const out=path.resolve('.sites-runtime/backup-test-snapshot.json');fs.writeFileSync(out,JSON.stringify(snap));
  await db.prepare('CREATE TABLE unexpected (id integer)').run();await assert.rejects(exportD1Snapshot(db,'owner'),e=>e.code==='BACKUP_INCOMPLETE'&&e.details.stage==='SCHEMA_VALIDATE'&&e.details.inventory.tables.includes('unexpected')&&e.details.inventory.columns.unexpected.includes('id')&&!JSON.stringify(e.details).includes('hello'));
  await db.prepare('DROP TABLE unexpected').run();
- await db.prepare('CREATE TABLE __appgarden_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,applied_at TEXT NOT NULL)').run();
+ await db.prepare('CREATE TABLE "__appgarden_migrations"(id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT UNIQUE,applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP NOT NULL)').run();
  await db.prepare('INSERT INTO __appgarden_migrations (name,applied_at) VALUES (?,?)').bind('fixture-private-value','now').run();
- await assert.rejects(exportD1Snapshot(db,'owner'),e=>e.code==='BACKUP_INCOMPLETE'&&e.details.stage==='SCHEMA_VALIDATE'&&e.details.inventory.definitions.__appgarden_migrations.includes('AUTOINCREMENT')&&e.details.inventory.definitions.sqlite_sequence.includes('sqlite_sequence')&&!JSON.stringify(e.details).includes('fixture-private-value'));
+ await db.prepare("UPDATE sqlite_sequence SET seq=123 WHERE name='__appgarden_migrations'").run();
+ const migrationsSnapshot=await exportD1Snapshot(db,'owner');
+ assert.equal(migrationsSnapshot.row_counts.__appgarden_migrations,1);assert.equal(migrationsSnapshot.row_counts.sqlite_sequence,1);
+ assert.equal(migrationsSnapshot.tables.__appgarden_migrations.rows[0][0].value,'1');
+ assert.equal(Buffer.from(migrationsSnapshot.tables.__appgarden_migrations.rows[0][1].hex,'hex').toString(),'fixture-private-value');
+ assert.equal(migrationsSnapshot.tables.sqlite_sequence.rows[0][1].value,'123');
+ const metaOut=path.resolve('.sites-runtime/backup-test-snapshot-migrations.json');fs.writeFileSync(metaOut,JSON.stringify(migrationsSnapshot));
+ await db.prepare('CREATE TABLE unexpected (id integer)').run();await assert.rejects(exportD1Snapshot(db,'owner'),e=>e.code==='BACKUP_INCOMPLETE'&&e.details.stage==='SCHEMA_VALIDATE'&&e.details.inventory.definitions.__appgarden_migrations.includes('AUTOINCREMENT')&&e.details.inventory.definitions.sqlite_sequence.includes('sqlite_sequence')&&!JSON.stringify(e.details).includes('fixture-private-value'));
  console.log(JSON.stringify({complete:true,unauthorized_rejected:true,unknown_table_rejected:true,missing_chunk_rejected:true,duplicate_null_rejected:true,owner_race_rejected:true,big_integer:true,blob_bytes:bytes.length,history:80,empty_tables:true,special_text:true,output:out}));
 }finally{await mf.dispose()}
