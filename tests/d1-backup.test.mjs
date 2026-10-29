@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import {Miniflare} from 'miniflare';
+import ts from 'typescript';
+const build=path.resolve('.sites-runtime/backup-testbuild');fs.mkdirSync(build,{recursive:true});
+for(const n of ['model','d1-backup'])fs.writeFileSync(path.join(build,n+'.mjs'),ts.transpileModule(fs.readFileSync('lib/'+n+'.ts','utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText.replace("'./model'","'./model.mjs'"));
+const {exportD1Snapshot}=await import(new URL('../.sites-runtime/backup-testbuild/d1-backup.mjs',import.meta.url));
+const mf=new Miniflare({modules:true,script:'export default { fetch(){return new Response("isolated")} }',compatibilityDate:'2026-05-15',d1Databases:{DB:'00000000-0000-4000-8000-000000000000'}});
+try{
+ const db=await mf.getD1Database('DB');
+ for(const f of ['0000_outstanding_ultimatum.sql','0001_sharp_yellowjacket.sql'])for(const sql of fs.readFileSync('drizzle/'+f,'utf8').split('--> statement-breakpoint').filter(s=>s.trim()))await db.prepare(sql).run();
+ await db.prepare("INSERT INTO ledgers VALUES (1,?,CAST('9007199254740993' AS INTEGER),?,?)").bind('owner','hello\0中文','last').run();
+ await db.prepare('INSERT INTO operations VALUES (?,?,?,?,?,?,?)').bind('one','owner','key','source','hash','{"z":1}','now').run();
+ for(let i=0;i<79;i++)await db.prepare('INSERT INTO operations VALUES (?,?,?,?,?,?,?)').bind('op'+i,'owner','key'+i,'source'+i,'hash','x'.repeat(55000),'now').run();
+ const bytes=Uint8Array.from({length:1500000},(_,i)=>i%256);
+ await db.prepare('INSERT INTO images VALUES (?,?,?,?,?,?,?)').bind('img','owner','hash','image/png',bytes.length,'now',bytes).run();
+ await db.prepare('INSERT INTO images VALUES (?,?,?,?,?,?,?)').bind('img2','owner','hash2','image/png',1.75,'now',new Uint8Array([0,255])).run();
+ await assert.rejects(exportD1Snapshot(db,'other'),e=>e.status===403);
+ const snap=await exportD1Snapshot(db,'owner');
+ assert.equal(snap.complete,true);assert.equal(snap.row_counts.images,2);assert.equal(snap.row_counts.image_recognitions,0);
+ const ledger=snap.tables.ledgers.rows[0];assert.equal(ledger[2].value,'9007199254740993');assert.equal(Buffer.from(ledger[3].hex,'hex').toString(),'hello\0中文');
+ assert.deepEqual(Buffer.from(snap.tables.images.rows[0][6].hex,'hex'),Buffer.from(bytes));
+ assert.equal(snap.tables.images.rows[1][4].type,'real');assert.equal(Number(snap.tables.images.rows[1][4].value),1.75);
+ const mutateResult=fn=>({prepare(sql){const stmt=db.prepare(sql);if(!sql.startsWith('WITH RECURSIVE chunks'))return stmt;return {all:async()=>{const result=await stmt.all();return {...result,results:fn(result.results)};}}}});
+ await assert.rejects(exportD1Snapshot(mutateResult(rs=>rs.filter(r=>!(r.kind==='cell'&&r.table_name==='images'&&r.column_name==='bytes'&&r.part===1))),'owner'),e=>e.code==='BACKUP_INCOMPLETE');
+ await assert.rejects(exportD1Snapshot(mutateResult(rs=>rs.filter(r=>!(r.kind==='cell'&&r.table_name==='operations'&&r.row_number===2))),'owner'),e=>e.code==='BACKUP_INCOMPLETE');
+ await assert.rejects(exportD1Snapshot(mutateResult(rs=>{const i=rs.findIndex(r=>r.kind==='cell'&&r.table_name==='operations'&&r.column_name==='created_at');const r={...rs[i],value_type:'null',value:null,byte_length:0};return [...rs.slice(0,i),r,...rs.slice(i+1),r];}),'owner'),e=>e.code==='BACKUP_INCOMPLETE');
+ await assert.rejects(exportD1Snapshot(mutateResult(rs=>rs.map(r=>r.kind==='cell'&&r.table_name==='ledgers'&&r.column_name==='owner_id'?{...r,value:'6F74686572',byte_length:5}:r)),'owner'),e=>e.status===403);
+ const out=path.resolve('.sites-runtime/backup-test-snapshot.json');fs.writeFileSync(out,JSON.stringify(snap));
+ await db.prepare('CREATE TABLE unexpected (id integer)').run();await assert.rejects(exportD1Snapshot(db,'owner'),e=>e.code==='BACKUP_INCOMPLETE');
+ console.log(JSON.stringify({complete:true,unauthorized_rejected:true,unknown_table_rejected:true,missing_chunk_rejected:true,duplicate_null_rejected:true,owner_race_rejected:true,big_integer:true,blob_bytes:bytes.length,history:80,empty_tables:true,special_text:true,output:out}));
+}finally{await mf.dispose()}
