@@ -23,18 +23,20 @@ try{
  const bytes=Uint8Array.from({length:1500000},(_,i)=>i%256);
  await db.prepare('INSERT INTO images VALUES (?,?,?,?,?,?,?)').bind('img','owner','hash','image/png',bytes.length,'now',bytes).run();
  await db.prepare('INSERT INTO images VALUES (?,?,?,?,?,?,?)').bind('img2','owner','hash2','image/png',1.75,'now',new Uint8Array([0,255])).run();
- await assert.rejects(exportD1Snapshot(db,'other'),e=>e.status===403);
+ await assert.rejects(exportD1Snapshot(db,'other'),e=>e.status===403&&!e.details?.inventory);
+ const brokenSchema={prepare(sql){if(sql.startsWith('SELECT type,name,tbl_name,sql FROM sqlite_schema'))return {all:async()=>{throw Error('private internal error');}};return db.prepare(sql)}};
+ await assert.rejects(exportD1Snapshot(brokenSchema,'owner'),e=>e.code==='BACKUP_INCOMPLETE'&&e.details.stage==='SCHEMA_READ'&&!JSON.stringify(e.details).includes('private internal error'));
  const snap=await exportD1Snapshot(db,'owner');
  assert.equal(snap.complete,true);assert.equal(snap.row_counts.images,2);assert.equal(snap.row_counts.image_recognitions,0);
  const ledger=snap.tables.ledgers.rows[0];assert.equal(ledger[2].value,'9007199254740993');assert.equal(Buffer.from(ledger[3].hex,'hex').toString(),'hello\0中文');
  assert.deepEqual(Buffer.from(snap.tables.images.rows[0][6].hex,'hex'),Buffer.from(bytes));
  assert.equal(snap.tables.images.rows[1][4].type,'real');assert.equal(Number(snap.tables.images.rows[1][4].value),1.75);
  const mutateResult=fn=>({prepare(sql){const stmt=db.prepare(sql);if(!sql.startsWith('WITH RECURSIVE chunks'))return stmt;return {all:async()=>{const result=await stmt.all();return {...result,results:fn(result.results)};}}}});
- await assert.rejects(exportD1Snapshot(mutateResult(rs=>rs.filter(r=>!(r.kind==='cell'&&r.table_name==='images'&&r.column_name==='bytes'&&r.part===1))),'owner'),e=>e.code==='BACKUP_INCOMPLETE');
+ await assert.rejects(exportD1Snapshot(mutateResult(rs=>rs.filter(r=>!(r.kind==='cell'&&r.table_name==='images'&&r.column_name==='bytes'&&r.part===1))),'owner'),e=>e.code==='BACKUP_INCOMPLETE'&&e.details.stage==='SNAPSHOT_VALIDATE');
  await assert.rejects(exportD1Snapshot(mutateResult(rs=>rs.filter(r=>!(r.kind==='cell'&&r.table_name==='operations'&&r.row_number===2))),'owner'),e=>e.code==='BACKUP_INCOMPLETE');
  await assert.rejects(exportD1Snapshot(mutateResult(rs=>{const i=rs.findIndex(r=>r.kind==='cell'&&r.table_name==='operations'&&r.column_name==='created_at');const r={...rs[i],value_type:'null',value:null,byte_length:0};return [...rs.slice(0,i),r,...rs.slice(i+1),r];}),'owner'),e=>e.code==='BACKUP_INCOMPLETE');
  await assert.rejects(exportD1Snapshot(mutateResult(rs=>rs.map(r=>r.kind==='cell'&&r.table_name==='ledgers'&&r.column_name==='owner_id'?{...r,value:'6F74686572',byte_length:5}:r)),'owner'),e=>e.status===403);
  const out=path.resolve('.sites-runtime/backup-test-snapshot.json');fs.writeFileSync(out,JSON.stringify(snap));
- await db.prepare('CREATE TABLE unexpected (id integer)').run();await assert.rejects(exportD1Snapshot(db,'owner'),e=>e.code==='BACKUP_INCOMPLETE');
+ await db.prepare('CREATE TABLE unexpected (id integer)').run();await assert.rejects(exportD1Snapshot(db,'owner'),e=>e.code==='BACKUP_INCOMPLETE'&&e.details.stage==='SCHEMA_VALIDATE'&&e.details.inventory.tables.includes('unexpected')&&e.details.inventory.columns.unexpected.includes('id')&&!JSON.stringify(e.details).includes('hello'));
  console.log(JSON.stringify({complete:true,unauthorized_rejected:true,unknown_table_rejected:true,missing_chunk_rejected:true,duplicate_null_rejected:true,owner_race_rejected:true,big_integer:true,blob_bytes:bytes.length,history:80,empty_tables:true,special_text:true,output:out}));
 }finally{await mf.dispose()}

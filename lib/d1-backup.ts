@@ -11,7 +11,6 @@ const ident=(s:string)=>'"'+s.replace(/"/g,'""')+'"';
 const lit=(s:string)=>"'"+s.replace(/'/g,"''")+"'";
 // D1 currently limits each compound SELECT to five terms.
 function union(parts:string[]):string {while(parts.length>5){const next:string[]=[];for(let i=0;i<parts.length;i+=5)next.push(`SELECT * FROM (${parts.slice(i,i+5).join(' UNION ALL ')})`);parts=next;}return parts.join(' UNION ALL ')}
-const bad=()=>new AppError(503,'BACKUP_INCOMPLETE','备份未完整生成，未返回数据。');
 const schemaSQL="SELECT type,name,tbl_name,sql FROM sqlite_schema ORDER BY type,name,tbl_name";
 
 // A custom header cannot be sent cross-origin by a browser without CORS
@@ -28,7 +27,23 @@ export async function exportD1Snapshot(db:Database,owner:string){
  if(!owner)throw new AppError(401,'AUTH','请先登录');
  const authorized=await db.prepare('SELECT owner_id FROM ledgers WHERE id=1').first<{owner_id:string}>();
  if(!authorized || authorized.owner_id!==owner)throw new AppError(403,'OWNER_ONLY','仅原账本所有者可备份');
+ const inventory:{tables:string[];indexes:string[];columns:Record<string,string[]>}={tables:[],indexes:[],columns:Object.create(null)};
+ let stage='SCHEMA_READ';
+ const bad=()=>new AppError(503,'BACKUP_INCOMPLETE','备份未完整生成，未返回数据。',{stage,inventory});
+ const safeName=(value:unknown)=>typeof value==='string'&&/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(value)?value:'[invalid]';
+ try{
  const pre=(await db.prepare(schemaSQL).all<Schema>()).results;
+ if(!Array.isArray(pre)||pre.length>200)throw bad();
+ inventory.tables=pre.filter(x=>x.type==='table').map(x=>safeName(x.name));
+ inventory.indexes=pre.filter(x=>x.type==='index').map(x=>safeName(x.name));
+ stage='COLUMN_READ';
+ for(const entry of pre.filter(x=>x.type==='table'&&!x.name.startsWith('_cf_')&&!x.name.startsWith('sqlite_'))){
+  const name=safeName(entry.name);if(name==='[invalid]')throw bad();
+  const found=(await db.prepare(`PRAGMA table_xinfo(${ident(name)})`).all<Col>()).results;
+  if(!Array.isArray(found)||found.length>100)throw bad();
+  inventory.columns[name]=found.map(c=>safeName(c.name));
+ }
+ stage='SCHEMA_VALIDATE';
  // Only explicitly identified Cloudflare system tables are excluded.
  const systemTables=new Set(['_cf_KV','_cf_METADATA']);
  if(pre.some(x=>x.type==='table'&&x.name.startsWith('_cf_')&&!systemTables.has(x.name)))throw bad();
@@ -49,6 +64,7 @@ export async function exportD1Snapshot(db:Database,owner:string){
   if(JSON.stringify(cols.map(c=>c.name))!==JSON.stringify(expectedColumns[table]))throw bad();
   columns[table]=cols.map(({name,pk,hidden})=>({name,pk,hidden}));
  }
+ stage='SIZE_CHECK';
  // Bound memory before making the transaction-sized read. A changed database
  // is checked again after the read; over-limit output is never returned.
  const sizeParts=tables.map(t=>`SELECT COALESCE(SUM(${columns[t].map(c=>`COALESCE(length(CAST(${ident(c.name)} AS BLOB)),0)`).join('+')}),0) AS n FROM ${ident(t)}`);
@@ -67,7 +83,9 @@ export async function exportD1Snapshot(db:Database,owner:string){
  });
  const sql=`WITH RECURSIVE chunks(n) AS (VALUES(0) UNION ALL SELECT n+1 FROM chunks WHERE n<7), ${ctes.join(', ')} ${union(selects)} ORDER BY 1,2,3,4,6`;
  if(sql.length>95000)throw bad();
+ stage='SNAPSHOT_READ';
  const result=await db.prepare(sql).all<Fragment>();
+ stage='SNAPSHOT_VALIDATE';
  if(!Array.isArray(result.results))throw bad();
  const actual=result.results.filter(x=>x.kind==='schema').map(x=>({type:x.column_name,name:x.table_name,tbl_name:x.value_type,sql:x.value})).sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name)||a.tbl_name.localeCompare(b.tbl_name));
  const expected=[...pre].sort((a,b)=>a.type.localeCompare(b.type)||a.name.localeCompare(b.name)||a.tbl_name.localeCompare(b.tbl_name));
@@ -103,4 +121,8 @@ export async function exportD1Snapshot(db:Database,owner:string){
  const ownerRows=rows.ledgers.filter(r=>r[idCol]?.type==='integer'&&r[idCol]?.value==='1');
  if(ownerRows.length!==1||ownerRows[0][ownerCol]?.type!=='text'||ownerRows[0][ownerCol]?.hex!==ownerHex)throw new AppError(403,'OWNER_ONLY','仅原账本所有者可备份');
  return {format:'d1-logical-snapshot-v1',captured_at:new Date().toISOString(),complete:true,schema:actual,row_counts:counts,tables:Object.fromEntries(tables.map(t=>[t,{columns:columns[t],rows:rows[t]}]))};
+ }catch(error){
+  if(error instanceof AppError&&(error.status===403||error.code==='BACKUP_INCOMPLETE'))throw error;
+  throw bad();
+ }
 }
