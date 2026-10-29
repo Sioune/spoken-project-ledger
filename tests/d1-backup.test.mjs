@@ -38,5 +38,9 @@ try{
  await assert.rejects(exportD1Snapshot(mutateResult(rs=>rs.map(r=>r.kind==='cell'&&r.table_name==='ledgers'&&r.column_name==='owner_id'?{...r,value:'6F74686572',byte_length:5}:r)),'owner'),e=>e.status===403);
  const out=path.resolve('.sites-runtime/backup-test-snapshot.json');fs.writeFileSync(out,JSON.stringify(snap));
  await db.prepare('CREATE TABLE unexpected (id integer)').run();await assert.rejects(exportD1Snapshot(db,'owner'),e=>e.code==='BACKUP_INCOMPLETE'&&e.details.stage==='SCHEMA_VALIDATE'&&e.details.inventory.tables.includes('unexpected')&&e.details.inventory.columns.unexpected.includes('id')&&!JSON.stringify(e.details).includes('hello'));
+ await db.prepare('DROP TABLE unexpected').run();
+ await db.prepare('CREATE TABLE __appgarden_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT,name TEXT NOT NULL UNIQUE,applied_at TEXT NOT NULL)').run();
+ await db.prepare('INSERT INTO __appgarden_migrations (name,applied_at) VALUES (?,?)').bind('fixture-private-value','now').run();
+ await assert.rejects(exportD1Snapshot(db,'owner'),e=>e.code==='BACKUP_INCOMPLETE'&&e.details.stage==='SCHEMA_VALIDATE'&&e.details.inventory.definitions.__appgarden_migrations.includes('AUTOINCREMENT')&&e.details.inventory.definitions.sqlite_sequence.includes('sqlite_sequence')&&!JSON.stringify(e.details).includes('fixture-private-value'));
  console.log(JSON.stringify({complete:true,unauthorized_rejected:true,unknown_table_rejected:true,missing_chunk_rejected:true,duplicate_null_rejected:true,owner_race_rejected:true,big_integer:true,blob_bytes:bytes.length,history:80,empty_tables:true,special_text:true,output:out}));
 }finally{await mf.dispose()}

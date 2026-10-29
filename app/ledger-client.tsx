@@ -227,12 +227,13 @@ export default function LedgerClient() {
     try {
       const response = await fetch("/api/d1-backup", { credentials: "same-origin", cache: "no-store", headers: { "X-Ledger-Backup": "download" } });
       if (!response.ok) {
-        const diagnostic = await response.json().catch(() => null) as {stage?:unknown;inventory?:{tables?:unknown;indexes?:unknown;columns?:unknown}} | null;
+        const diagnostic = await response.json().catch(() => null) as {stage?:unknown;inventory?:{tables?:unknown;indexes?:unknown;columns?:unknown;definitions?:unknown}} | null;
         const stage = typeof diagnostic?.stage === "string" && /^[A-Z_]+$/.test(diagnostic.stage) ? diagnostic.stage : "";
         const names = (value:unknown) => Array.isArray(value) ? value.filter((x):x is string => typeof x === "string" && /^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(x)).join("、") : "";
         const info = diagnostic?.inventory;
         const fields = info?.columns && typeof info.columns === "object" ? Object.entries(info.columns).map(([table, columns]) => `${table}：${names(columns)}`).join("；") : "";
-        throw new Error(`数据库备份未能完成（${response.status}${stage ? `，阶段 ${stage}` : ""}）${info ? `。表：${names(info.tables)}；索引：${names(info.indexes)}；字段：${fields}` : ""}`);
+        const definitions = info?.definitions && typeof info.definitions === "object" ? Object.entries(info.definitions).filter(([name,sql]) => ["__appgarden_migrations", "sqlite_sequence"].includes(name) && typeof sql === "string" && sql.length <= 2048).map(([name,sql]) => `${name}：${sql}`).join("；") : "";
+        throw new Error(`数据库备份未能完成（${response.status}${stage ? `，阶段 ${stage}` : ""}）${info ? `。表：${names(info.tables)}；索引：${names(info.indexes)}；字段：${fields}${definitions ? `；定义：${definitions}` : ""}` : ""}`);
       }
       const blob = await response.blob(); const url = URL.createObjectURL(blob); const link = document.createElement("a");
       link.href = url; link.download = `项目簿数据库备份-${shanghaiDay()}.json`; link.click(); URL.revokeObjectURL(url);

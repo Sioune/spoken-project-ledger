@@ -27,7 +27,7 @@ export async function exportD1Snapshot(db:Database,owner:string){
  if(!owner)throw new AppError(401,'AUTH','请先登录');
  const authorized=await db.prepare('SELECT owner_id FROM ledgers WHERE id=1').first<{owner_id:string}>();
  if(!authorized || authorized.owner_id!==owner)throw new AppError(403,'OWNER_ONLY','仅原账本所有者可备份');
- const inventory:{tables:string[];indexes:string[];columns:Record<string,string[]>}={tables:[],indexes:[],columns:Object.create(null)};
+ const inventory:{tables:string[];indexes:string[];columns:Record<string,string[]>;definitions:Record<string,string>}={tables:[],indexes:[],columns:Object.create(null),definitions:Object.create(null)};
  let stage='SCHEMA_READ';
  const bad=()=>new AppError(503,'BACKUP_INCOMPLETE','备份未完整生成，未返回数据。',{stage,inventory});
  const safeName=(value:unknown)=>typeof value==='string'&&/^[A-Za-z_][A-Za-z0-9_]{0,63}$/.test(value)?value:'[invalid]';
@@ -36,6 +36,10 @@ export async function exportD1Snapshot(db:Database,owner:string){
  if(!Array.isArray(pre)||pre.length>200)throw bad();
  inventory.tables=pre.filter(x=>x.type==='table').map(x=>safeName(x.name));
  inventory.indexes=pre.filter(x=>x.type==='index').map(x=>safeName(x.name));
+ for(const name of ['__appgarden_migrations','sqlite_sequence']){
+  const definition=pre.find(x=>x.type==='table'&&x.name===name)?.sql;
+  if(typeof definition==='string'&&definition.length<=2048)inventory.definitions[name]=definition;
+ }
  stage='COLUMN_READ';
  for(const entry of pre.filter(x=>x.type==='table'&&!x.name.startsWith('_cf_')&&!x.name.startsWith('sqlite_'))){
   const name=safeName(entry.name);if(name==='[invalid]')throw bad();
