@@ -7,7 +7,7 @@ import type { Submit } from "@/lib/model";
 import CodexBridgePanel, { type CodexBridgeInput, type CodexBridgeResult } from "./codex-bridge-panel";
 import "./image-intake.css";
 
-export type ImageIntakeProps = { projects: { id: string; name: string }[]; tasks: ExistingTaskRef[]; revision: number; disabled: boolean; onSaved: (operationId: string) => Promise<boolean>; onOpenTask: (id: string) => void };
+export type ImageIntakeProps = { accountScope: string; projects: { id: string; name: string }[]; tasks: ExistingTaskRef[]; revision: number; disabled: boolean; onSaved: (operationId: string) => Promise<boolean>; onPendingChange: (pending: boolean, scope: string) => void; onOpenTask: (id: string) => void };
 type LocalImage = { blob: Blob; name: string; type: string; size: number; lastModified: number };
 type IntakeDraft = { version: 1; sourceEventId: string; recognitionRequestId: string; recognitionModel: string | null; note: string; image: LocalImage | null; fields: IntakeFields; mode: "image" | "manual"; recognitionQuestions: string[]; recognitionQuestionHistory: string[]; resolvedRecognitionQuestions: string[]; recognized: { provider: string; model: string } | null; preview: IntakePreview | null; pending: Submit | null; conflict: boolean; imageError: string; savedAt: string };
 type Phase = "idle" | "running" | "error" | "done";
@@ -35,11 +35,13 @@ async function readDraft(scope: string): Promise<IntakeDraft | null> {
     return await new Promise((resolve, reject) => {
       const transaction = db.transaction("drafts", "readonly");
       const request = transaction.objectStore("drafts").get(scope);
-      request.onsuccess = () => { const item = request.result as IntakeDraft | undefined; resolve(item?.version === 1 && typeof item.sourceEventId === "string" && typeof item.fields?.title === "string" ? { ...newDraft(), ...item, fields: { ...EMPTY_INTAKE_FIELDS, ...item.fields }, recognitionQuestionHistory: item.recognitionQuestionHistory || item.recognitionQuestions || [], resolvedRecognitionQuestions: item.resolvedRecognitionQuestions || [] } : null); };
+      request.onsuccess = () => { const item = request.result as IntakeDraft | undefined; if (item === undefined) { resolve(null); return; } if (item?.version !== 1 || typeof item.sourceEventId !== "string" || typeof item.fields?.title !== "string" || (item.pending && typeof item.pending.operation_id !== "string")) { reject(new Error("本人图片草稿格式异常，请先核对原编号")); return; } resolve({ ...newDraft(), ...item, fields: { ...EMPTY_INTAKE_FIELDS, ...item.fields }, recognitionQuestionHistory: item.recognitionQuestionHistory || item.recognitionQuestions || [], resolvedRecognitionQuestions: item.resolvedRecognitionQuestions || [] }); };
       request.onerror = () => reject(request.error || new Error("本机草稿读取失败"));
     });
   } finally { db.close(); }
 }
+
+export async function hasPendingImageDraft(scope: string): Promise<boolean> { return !!(await readDraft(scope))?.pending; }
 
 async function writeDraft(scope: string, draft: IntakeDraft): Promise<void> {
   const db = await openDraftDatabase();
@@ -58,12 +60,14 @@ class IntakeError extends Error {
   constructor(message: string, public status: number, public code: string) { super(message); }
 }
 
-async function requestJSON<T>(url: string, body?: FormData, timeout = 60000): Promise<T> {
+async function requestJSON<T>(url: string, scope: string, body?: FormData, timeout = 60000): Promise<T> {
+  if (!/^[a-f0-9]{64}$/.test(scope)) throw new IntakeError("请先核验当前账号",409,"ACCOUNT_CHANGED");
   const controller = new AbortController(), timer = window.setTimeout(() => controller.abort(), timeout);
   try {
-    const response = await fetch(url, { method: body ? "POST" : "GET", body, credentials: "include", cache: "no-store", signal: controller.signal });
+    const response = await fetch(url, { method: body ? "POST" : "GET", body, credentials: "include", cache: "no-store", headers: { "X-Ledger-Account-Scope": scope }, signal: controller.signal });
     const result: unknown = await response.json().catch(() => ({}));
     const detail = result && typeof result === "object" && !Array.isArray(result) ? result as Record<string, unknown> : {};
+    if (!response.ok && detail.error === "ACCOUNT_CHANGED") window.dispatchEvent(new Event("ledger:account-changed"));
     if (!response.ok) throw new IntakeError(String(detail.message || detail.error || "请求暂未完成"), response.status, String(detail.error || "REQUEST"));
     return result as T;
   } finally { window.clearTimeout(timer); }
@@ -84,7 +88,7 @@ function displayChange(key: string, value: unknown, projects: { id: string; name
   return Array.isArray(value) ? value.join("、") || "无" : value === null || value === "" ? "未提供" : String(value);
 }
 
-export default function ImageIntake({ projects, tasks, revision, disabled, onSaved, onOpenTask }: ImageIntakeProps) {
+export default function ImageIntake({ accountScope, projects, tasks, revision, disabled, onSaved, onPendingChange, onOpenTask }: ImageIntakeProps) {
   const [draft, setDraft] = useState<IntakeDraft>(newDraft);
   const [capabilities, setCapabilities] = useState<IntakeCapabilities | null>(null);
   const [scope, setScope] = useState<string | null>(null);
@@ -98,6 +102,7 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
   const busy = recognition === "running" || previewPhase === "running" || savePhase === "saving" || savePhase === "verifying";
   const locked = disabled || !ready || !scope || busy || !!draft.pending;
   const visionAvailable = !!capabilities?.vision.configured && !!capabilities.vision.enabled;
+  useEffect(() => { if (ready) onPendingChange(!!draft.pending, accountScope); }, [ready, draft.pending, accountScope, onPendingChange]);
 
   function lockAccount() {
     accessEpoch.current++; setScope(null); setCapabilities(null); setReady(false); setDraft(newDraft()); setConsent(false);
@@ -105,7 +110,7 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
   }
 
   function reportError(cause: unknown, fallback: string) {
-    if (cause instanceof IntakeError && (cause.status === 401 || cause.status === 403)) { lockAccount(); return; }
+    if (cause instanceof IntakeError && (cause.status === 401 || cause.status === 403 || cause.code === "ACCOUNT_CHANGED")) { lockAccount(); return; }
     setError(cause instanceof Error && cause.name !== "AbortError" ? `${fallback}：${cause.message}` : `${fallback}：连接超时或中断。图片、文字与原编号仍保留。`);
   }
 
@@ -115,9 +120,9 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
     setCapabilityLoading(true); setReady(false); setConsent(false);
     void (async () => {
       try {
-        const next = await requestJSON<IntakeCapabilities>("/api/intake/capabilities");
+        const next = await requestJSON<IntakeCapabilities>("/api/intake/capabilities",accountScope);
         if (cancelled || epoch !== accessEpoch.current) return;
-        if (!next.draft_scope || typeof next.draft_scope !== "string") throw new Error("尚未取得本人草稿空间，未读取本机图片");
+        if (!next.draft_scope || next.draft_scope !== accountScope) throw new Error("尚未取得本人草稿空间，未读取本机图片");
         setCapabilities(next); setScope(next.draft_scope);
         await persistenceQueue.current.catch(() => {});
         const restored = await readDraft(next.draft_scope);
@@ -132,7 +137,7 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
       } finally { if (!cancelled) setCapabilityLoading(false); }
     })();
     return () => { cancelled = true; if (epoch === accessEpoch.current) accessEpoch.current++; };
-  }, [capabilityAttempt]);
+  }, [accountScope, capabilityAttempt]);
 
   useEffect(() => {
     if (!draft.image) { setImageURL(""); return; }
@@ -184,7 +189,7 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
     try {
       await persistNow(draft);
       const form = withImage(new FormData(), draft.image); form.set("note", draft.note); form.set("request_id", draft.recognitionRequestId); form.set("consent", "true");
-      const result = await requestJSON<RecognitionResult>("/api/intake/recognize", form);
+      const result = await requestJSON<RecognitionResult>("/api/intake/recognize", accountScope, form);
       if (epoch !== accessEpoch.current) return;
       setDraft(current => ({ ...current, fields: result.fields, mode: "manual", recognized: { provider: result.provider, model: result.model }, recognitionQuestions: result.questions || [], recognitionQuestionHistory: result.questions || [], resolvedRecognitionQuestions: [], preview: null, savedAt: new Date().toISOString() }));
       setRecognition("done"); setMessage("已取得识别候选，尚未保存。请逐项修订字段，再生成核对预览。");
@@ -200,7 +205,7 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
       await persistNow(draft);
       const form = withImage(new FormData(), draft.image);
       form.set("draft_json", JSON.stringify({ fields: draft.fields, note: draft.note, questions: draft.recognitionQuestions, source_event_id: draft.sourceEventId }));
-      const result = await requestJSON<IntakePreview>("/api/intake/preview", form);
+      const result = await requestJSON<IntakePreview>("/api/intake/preview", accountScope, form);
       if (epoch !== accessEpoch.current) return;
       setDraft(current => ({ ...current, fields: result.fields, preview: result, savedAt: new Date().toISOString() }));
       setPreviewPhase("done"); setMessage(result.changes.length ? "核对预览已生成；确认后才会正式保存。" : "本次只预览，没有可直接保存的变更。");
@@ -216,6 +221,7 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
     setRecognition("running"); setError(""); setMessage("正在通过本人本机授权识别原图；尚未保存事项。");
     try {
       await persistNow(started); if (epoch !== accessEpoch.current) return; setDraft(started);
+      await requestJSON<IntakeCapabilities>("/api/intake/capabilities",accountScope); if (epoch !== accessEpoch.current) return;
       const localImage = draft.image;
       const bytes = await localImage.blob.arrayBuffer();
       const hash = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(value => value.toString(16).padStart(2, "0")).join("");
@@ -226,12 +232,12 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
       if (epoch !== accessEpoch.current) return;
       if (bridge?.provider !== "codex-local-plan" || bridge.completed !== true || bridge.request_id !== started.recognitionRequestId || bridge.model !== model || bridge.image_sha256 !== hash || !bridge.result) throw new Error("本机响应的识别结果、原图校验或原请求编号不一致；没有采用候选，也没有保存事项");
       const form = withImage(new FormData(), localImage); form.set("result_json", JSON.stringify(bridge));
-      const result = await requestJSON<RecognitionResult>("/api/intake/codex-result", form);
+      const result = await requestJSON<RecognitionResult>("/api/intake/codex-result", accountScope, form);
       if (epoch !== accessEpoch.current) return;
       const candidate: IntakeDraft = { ...started, fields: { ...result.fields, action: "inspect", uncertainties_confirmed: false }, mode: "manual", recognized: { provider: result.provider, model: result.model }, recognitionQuestions: result.questions || [], recognitionQuestionHistory: result.questions || [], resolvedRecognitionQuestions: [], preview: null, savedAt: new Date().toISOString() };
       setDraft(candidate); await persistNow(candidate); setRecognition("done"); setPreviewPhase("running");
       const previewForm = withImage(new FormData(), localImage); previewForm.set("draft_json", JSON.stringify({ fields: candidate.fields, note: candidate.note, questions: candidate.recognitionQuestions, source_event_id: candidate.sourceEventId }));
-      const preview = await requestJSON<IntakePreview>("/api/intake/preview", previewForm);
+      const preview = await requestJSON<IntakePreview>("/api/intake/preview", accountScope, previewForm);
       if (epoch !== accessEpoch.current) return;
       if (preview.changes.length || preview.fields.action !== "inspect") throw new Error("自动识别回来的预览必须仅供核对，未采用意外的保存变更");
       setDraft(current => ({ ...current, fields: preview.fields, preview, savedAt: new Date().toISOString() })); setPreviewPhase("done");
@@ -259,11 +265,11 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
     const epoch = accessEpoch.current;
     const payload: Submit = existing || { operation_id: `image-op-${crypto.randomUUID()}`, idempotency_key: `image-key-${crypto.randomUUID()}`, source_event_id: draft.preview!.source_event_id, base_version: draft.preview!.base_version, occurred_at: draft.preview!.occurred_at, raw_text: draft.note || `图片与事项核对：${draft.fields.title}`, changes: draft.preview!.changes, confirmed: true };
     const pending = { ...draft, pending: payload, conflict: false, savedAt: new Date().toISOString() };
-    setSavePhase("saving"); setError(""); setMessage("正在提交图片和事项；尚未确认保存成功。");
+    onPendingChange(true, accountScope); setSavePhase("saving"); setError(""); setMessage("正在提交图片和事项；尚未确认保存成功。");
     try {
       await persistNow(pending); setDraft(pending);
       const form = withImage(new FormData(), draft.image); form.set("payload_json", JSON.stringify(payload));
-      const response = await requestJSON<{ operation_id: string }>("/api/intake/commit", form);
+      const response = await requestJSON<{ operation_id: string }>("/api/intake/commit", accountScope, form);
       if (response.operation_id !== payload.operation_id) throw new Error("回执编号与原请求不同，请继续按原编号核对，未清理草稿");
       if (epoch !== accessEpoch.current) return;
       setSavePhase("verifying"); await finishVerification(payload.operation_id);
@@ -287,7 +293,7 @@ export default function ImageIntake({ projects, tasks, revision, disabled, onSav
     if (!draft.pending || !draft.conflict || busy || disabled) return;
     const epoch = accessEpoch.current;
     setSavePhase("verifying"); setError("");
-    try { await requestJSON(`/api/operations/${encodeURIComponent(draft.pending.operation_id)}`); if (epoch === accessEpoch.current) await finishVerification(draft.pending.operation_id); }
+    try { await requestJSON(`/api/operations/${encodeURIComponent(draft.pending.operation_id)}`,accountScope); if (epoch === accessEpoch.current) await finishVerification(draft.pending.operation_id); }
     catch (cause) {
       if (epoch !== accessEpoch.current) return;
       if (cause instanceof IntakeError && cause.status === 404) { setDraft(current => ({ ...current, pending: null, preview: null, conflict: false })); setSavePhase("idle"); setMessage("已核对原编号尚未保存。草稿和图片保留，请读取最新状态后重新生成预览；不会自动新增。"); }

@@ -131,3 +131,9 @@ test('不同轮次的日期和步骤通过同一依赖图关联也不能选错�
  const data=fixture({compound:false,chain:true});data.tasks.find(t=>t.id==='second-cut').dependencies=['previous-reply'];
  conservative('10月16日 teaser 第2轮反馈收到了',data);
 });
+
+test('空账号没有收件箱时，不生成指向其他账号默认项目的任务',()=>{
+ const data=fixture();data.projects=[];data.tasks=[];
+ const result=parse('新增待办：整理资料',data);
+ assert.deepEqual(result.changes,[]);assert.ok(result.questions.some(q=>q.includes('项目')));
+});

@@ -3,7 +3,7 @@ import {ledgerCommitInputSchema,mcpCommitPayload} from '@/lib/mcp-contract';
 export const dynamic='force-dynamic';
 const tools=[
  {name:'ledger_read',description:'读取本人项目、任务、文件引用及最新revision。应用数据库是正式状态库。',inputSchema:{type:'object',properties:{},additionalProperties:false}},
- {name:'ledger_initialize',description:'用户明确授权后初始化六项真实任务。不会外发或设截止日。',inputSchema:{type:'object',properties:{},additionalProperties:false}},
+ {name:'ledger_initialize',description:'为当前登录账号初始化空白项目簿；不会导入其他账号的任务。',inputSchema:{type:'object',properties:{},additionalProperties:false}},
  {name:'ledger_preview',description:'预览文本模拟转写，返回明确变更和待确认问题。未确认事实不能写入。',inputSchema:{type:'object',properties:{text:{type:'string'},source_event_id:{type:'string'},occurred_at:{type:'string'}},required:['text'],additionalProperties:false}},
  {name:'ledger_commit',description:'按预期版本原子提交一组变更，保存后读回回执。update可补记source_ref与next_action，不改变其他业务事实。document新增需project_id、filename、library_ref，更新版本用change.id，采用版用accepted_version。重试必须保留原编号和全部内容。成功只证明应用保存。',inputSchema:ledgerCommitInputSchema},
  {name:'ledger_commit_json',description:'与ledger_commit完全相同的提交入口。若原生工具无法转交嵌套changes对象，将完整原请求JSON作为payload_json传入；保持原operation_id、幂等键、来源、时间和版本。使用同一权限/校验/数据库，不绕过确认。',inputSchema:{type:'object',properties:{payload_json:{type:'string',maxLength:1000000}},required:['payload_json'],additionalProperties:false}},

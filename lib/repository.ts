@@ -1,4 +1,4 @@
-import {AppError,applyChanges,seed,type Ledger,type Submit} from './model';
+import {AppError,applyChanges,type Ledger,type Submit} from './model';
 import type {CalendarData,CalendarRegistration} from './calendar';
 export type Statement={bind:(...v:unknown[])=>Statement;first:<T=Record<string,unknown>>()=>Promise<T|null>;all:<T=Record<string,unknown>>()=>Promise<{results:T[]}>;run:()=>Promise<unknown>};
 export type Database={prepare:(sql:string)=>Statement;batch:(s:Statement[])=>Promise<unknown[]>};
@@ -13,7 +13,7 @@ async function hash(v:unknown){const digest=await crypto.subtle.digest('SHA-256'
 async function imageHash(bytes:ArrayBuffer){const digest=await crypto.subtle.digest('SHA-256',bytes);return Array.from(new Uint8Array(digest)).map(b=>b.toString(16).padStart(2,'0')).join('')}
 export class Repository{
  constructor(private db:Database,private owner:string){if(!owner)throw new AppError(401,'AUTH','请先以本人身份登录')}
- async state(){const row=await this.db.prepare('SELECT * FROM ledgers WHERE id=1').first<Row>();if(row&&row.owner_id!==this.owner)throw new AppError(403,'OWNER_ONLY','仅本人可以访问此状态库');return row}
+ async state(){return this.db.prepare('SELECT * FROM ledgers WHERE owner_id=?').bind(this.owner).first<Row>()}
  async prepareImage(bytes:ArrayBuffer,mime:string):Promise<PendingImage>{
   if(!await this.state())throw new AppError(409,'INITIALIZE','请先初始化状态库');
   if(!(bytes instanceof ArrayBuffer)||!bytes.byteLength||bytes.byteLength>1500000)throw new AppError(413,'IMAGE_SIZE','原图须为1至1,500,000字节；不会缩图冒充原图');
@@ -31,15 +31,19 @@ export class Repository{
  }
  async initialize(){
   const existing=await this.state();if(existing)return {initialized:true,revision:existing.revision,data:JSON.parse(existing.data),operation_id:'initialize',duplicate:true};
-  const now=new Date().toISOString(),data=seed(now),before={...data,projects:[],tasks:[],documents:[],pending:[]};
-  const receipt:Receipt={state:'saved',operation_id:'initialize',result_version:1,created_at:now,occurred_at:now,timezone:'Asia/Shanghai',changes:[{type:'initialize',values:{source_ref:'用户批准的六项初始自述'}}],before,after:data,source_event_id:'initialize',raw_text:'导入已授权的六项初始工作；未填未知完成时刻、截止日与提醒时间'};
+  const now=new Date().toISOString(),data:Ledger={projects:[],tasks:[],documents:[],pending:[],settings:{timezone:'Asia/Shanghai',intervalHours:2,workStart:'09:00',workEnd:'19:00',enabled:false},reminderLog:[]},before=structuredClone(data);
+  const receipt:Receipt={state:'saved',operation_id:'initialize',result_version:1,created_at:now,occurred_at:now,timezone:'Asia/Shanghai',changes:[{type:'initialize',values:{source_ref:'创建空账本'}}],before,after:data,source_event_id:'initialize',raw_text:'创建空账本'};
+  const internalId=await this.operationStorageId('initialize');
   await this.db.batch([
-   this.db.prepare('INSERT OR IGNORE INTO ledgers (id,owner_id,revision,data,last_operation) VALUES (1,?,1,?,?)').bind(this.owner,JSON.stringify(data),'initialize'),
-   this.db.prepare('INSERT OR IGNORE INTO operations (id,owner_id,idempotency_key,source_event_id,payload_hash,receipt,created_at) SELECT ?,?,?,?,?,?,? FROM ledgers WHERE id=1 AND owner_id=? AND last_operation=?').bind('initialize',this.owner,'initialize','initialize',await hash(data),JSON.stringify(receipt),now,this.owner,'initialize')
-  ]);const row=await this.state();if(!row)throw new AppError(503,'SAVE_FAILED','初始化未读回，请重试');return {initialized:true,revision:row.revision,data:JSON.parse(row.data),operation_id:'initialize'};
+   this.db.prepare('INSERT OR IGNORE INTO ledgers (owner_id,revision,data,last_operation) VALUES (?,1,?,?)').bind(this.owner,JSON.stringify(data),'initialize'),
+   this.db.prepare('INSERT OR IGNORE INTO operations (id,owner_id,idempotency_key,source_event_id,payload_hash,receipt,created_at) SELECT CASE WHEN id=1 THEN ? ELSE ? END,?,?,?,?,?,? FROM ledgers WHERE owner_id=? AND last_operation=?').bind('initialize',internalId,this.owner,'initialize','initialize',await hash(data),JSON.stringify(receipt),now,this.owner,'initialize')
+  ]);const row=await this.state();if(!row||!await this.opById('initialize'))throw new AppError(503,'SAVE_FAILED','初始化未读回，请重试');return {initialized:true,revision:row.revision,data:JSON.parse(row.data),operation_id:'initialize'};
  }
  async read(){const row=await this.state();return row?{initialized:true,revision:row.revision,data:JSON.parse(row.data) as Ledger}:{initialized:false,revision:0,data:null}}
- private async opById(id:string){return this.db.prepare('SELECT * FROM operations WHERE id=? AND owner_id=?').bind(id,this.owner).first<Op>()}
+ // Preserve the original owner's global primary keys for rollback compatibility.
+ // Other accounts use stable, scoped storage IDs; receipt IDs remain external.
+ private async operationStorageId(id:string){return 'account-op:'+await hash({owner:this.owner,operation_id:id})}
+ private async opById(id:string){const storageId=await this.operationStorageId(id);return this.db.prepare("SELECT * FROM operations WHERE owner_id=? AND (id=? OR id=?) AND CASE WHEN json_valid(receipt) THEN json_extract(receipt,'$.operation_id')=? ELSE 0 END").bind(this.owner,storageId,id,id).first<Op>()}
  async receipt(id:string){await this.state();const op=await this.opById(id);if(!op)throw new AppError(404,'OPERATION','操作编号不存在，不能确认保存成功');const receipt=JSON.parse(op.receipt) as Receipt;try {const row=await this.state();if(!row||row.revision<receipt.result_version)throw Error('readback');if(row.revision===receipt.result_version&&canonical(JSON.parse(row.data))!==canonical(receipt.after))throw Error('mismatch');return {...receipt,state:'verified',current_revision:row.revision,verification:row.revision===receipt.result_version?'current_fields_match':'historical_commit_current_is_newer'}}catch(e){if(e instanceof AppError&&e.status===403)throw e;return {...receipt,state:'pending_verification',verification:'readback_unavailable'}}}
  async history(){await this.state();const result=await this.db.prepare('SELECT * FROM operations WHERE owner_id=? ORDER BY created_at DESC LIMIT 100').bind(this.owner).all<Op>();return {operations:result.results.map(op=>JSON.parse(op.receipt))}}
  async calendar():Promise<CalendarData>{
@@ -102,10 +106,15 @@ export class Repository{
    image={...checked,uploaded_at:image.uploaded_at};
   }
   const payloadHash=await hash({source_event_id:input.source_event_id,base_version:input.base_version,occurred_at:input.occurred_at,raw_text:input.raw_text,changes:input.changes,undo_of:input.undo_of??null});
-  const existing=await this.db.prepare('SELECT * FROM operations WHERE owner_id=? AND (id=? OR idempotency_key=? OR source_event_id=?)').bind(this.owner,input.operation_id,input.idempotency_key,input.source_event_id).first<Op>();
-  if(existing){if(existing.payload_hash!==payloadHash)throw new AppError(409,'IDEMPOTENCY_MISMATCH','相同操作、来源或幂等编号已用于不同内容，请核对原回执');return {...await this.receipt(existing.id),duplicate:true}}
+  const internalId=await this.operationStorageId(input.operation_id);
+  const existing=await this.db.prepare("SELECT * FROM operations WHERE owner_id=? AND ((id IN (?,?) AND CASE WHEN json_valid(receipt) THEN json_extract(receipt,'$.operation_id')=? ELSE 0 END) OR idempotency_key=? OR source_event_id=?)").bind(this.owner,internalId,input.operation_id,input.operation_id,input.idempotency_key,input.source_event_id).first<Op>();
+  if(existing){if(existing.payload_hash!==payloadHash)throw new AppError(409,'IDEMPOTENCY_MISMATCH','相同操作、来源或幂等编号已用于不同内容，请核对原回执');return {...await this.receipt((JSON.parse(existing.receipt) as Receipt).operation_id),duplicate:true}}
   const row=await this.state();if(!row)throw new AppError(409,'INITIALIZE','请先初始化状态库');
   if(row.revision!==input.base_version)throw new AppError(409,'REVISION_CONFLICT','当前状态已有更新，请刷新并核对差异',{current_revision:row.revision,current_data:JSON.parse(row.data)});
+  // A legacy owner may already have such an ID; the duplicate lookup above
+  // preserves those. New owner IDs cannot occupy the scoped-ID namespace.
+  if(row.id===1&&input.operation_id.startsWith('account-op:'))throw new AppError(400,'RESERVED_OPERATION_ID','操作编号使用了保留前缀，请使用新的唯一编号');
+  const storedOperationId=row.id===1?input.operation_id:internalId;
   const now=new Date().toISOString(),before=JSON.parse(row.data) as Ledger;
   for(const change of input.changes??[]){if(change.type!=='create'||!Array.isArray(change.values?.attachment_ids))continue;const candidate=before.tasks.find(task=>task.attachment_ids?.some(id=>(change.values.attachment_ids as unknown[]).includes(id)));if(candidate)throw new AppError(409,'DUPLICATE_IMAGE','原图已关联已有事项，请核对该记录后补充',{candidate});}
   const {data:after,effective}=applyChanges(before,input.changes,now,input.occurred_at);
@@ -116,12 +125,12 @@ export class Repository{
   const receipt:Receipt={state:'saved',operation_id:input.operation_id,result_version:row.revision+1,created_at:now,occurred_at:input.occurred_at,timezone:after.settings.timezone,changes:effective,before,after,source_event_id:input.source_event_id,raw_text:input.raw_text,...(input.undo_of?{undo_of:input.undo_of}:{})};
   try{
    await this.db.batch([
-    this.db.prepare('UPDATE ledgers SET data=?,revision=revision+1,last_operation=? WHERE id=1 AND owner_id=? AND revision=?').bind(JSON.stringify(after),input.operation_id,this.owner,input.base_version),
-    ...(image?[this.db.prepare('INSERT OR IGNORE INTO images (id,owner_id,sha256,mime_type,byte_size,uploaded_at,bytes) SELECT ?,?,?,?,?,?,? FROM ledgers WHERE id=1 AND owner_id=? AND last_operation=? AND revision=?').bind(image.id,this.owner,image.sha256,image.mime_type,image.byte_size,image.uploaded_at,image.bytes,this.owner,input.operation_id,row.revision+1)]:[]),
-    this.db.prepare('INSERT INTO operations (id,owner_id,idempotency_key,source_event_id,payload_hash,receipt,created_at) SELECT ?,?,?,?,?,?,? FROM ledgers WHERE id=1 AND owner_id=? AND last_operation=? AND revision=?').bind(input.operation_id,this.owner,input.idempotency_key,input.source_event_id,payloadHash,JSON.stringify(receipt),now,this.owner,input.operation_id,row.revision+1)
+    this.db.prepare('UPDATE ledgers SET data=?,revision=revision+1,last_operation=? WHERE owner_id=? AND revision=?').bind(JSON.stringify(after),input.operation_id,this.owner,input.base_version),
+    ...(image?[this.db.prepare('INSERT OR IGNORE INTO images (id,owner_id,sha256,mime_type,byte_size,uploaded_at,bytes) SELECT ?,?,?,?,?,?,? FROM ledgers WHERE owner_id=? AND last_operation=? AND revision=?').bind(image.id,this.owner,image.sha256,image.mime_type,image.byte_size,image.uploaded_at,image.bytes,this.owner,input.operation_id,row.revision+1)]:[]),
+    this.db.prepare('INSERT INTO operations (id,owner_id,idempotency_key,source_event_id,payload_hash,receipt,created_at) SELECT ?,?,?,?,?,?,? FROM ledgers WHERE owner_id=? AND last_operation=? AND revision=?').bind(storedOperationId,this.owner,input.idempotency_key,input.source_event_id,payloadHash,JSON.stringify(receipt),now,this.owner,input.operation_id,row.revision+1)
    ]);
   }catch{
-   const saved=await this.opById(input.operation_id);if(saved&&saved.payload_hash===payloadHash)return {...await this.receipt(saved.id),duplicate:true};throw new AppError(503,'SAVE_FAILED','保存未能确认。请按原操作编号查询；保留编号重试，不能报告成功',{operation_id:input.operation_id});
+   const saved=await this.opById(input.operation_id);if(saved&&saved.payload_hash===payloadHash)return {...await this.receipt(input.operation_id),duplicate:true};throw new AppError(503,'SAVE_FAILED','保存未能确认。请按原操作编号查询；保留编号重试，不能报告成功',{operation_id:input.operation_id});
   }
   const saved=await this.opById(input.operation_id);if(!saved){const latest=await this.state();throw new AppError(409,'REVISION_CONFLICT','提交期间发生并发更新，请刷新核对',{current_revision:latest?.revision,current_data:latest?JSON.parse(latest.data):null})}
   return this.receipt(input.operation_id);

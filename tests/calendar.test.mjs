@@ -93,7 +93,7 @@ test('超过100历史的晚期旧任务仍被分页找到，按revision而非时
 
 test('已知服务端created_at优先且无需历史，不随更新、重试或回执漂移',async()=>{
  const db=new Adapter(),repo=new Repository(db,'owner-test');
- try{await repo.initialize();const state=await repo.read();const request=submit(state.revision,[{type:'create',id:'t-recorded',values:{title:'服务端登记测试',project_id:'p-inbox'}}]);const receipt=await repo.commit(request);assert.equal(receipt.after.tasks.find(t=>t.id==='t-recorded').created_at,receipt.created_at);const before=await repo.calendar();await repo.commit(submit(receipt.result_version,[update('t-recorded',{next_action:'编辑不会移动登记日'})]));const replay=await repo.commit(request);assert.equal(replay.duplicate,true);const after=await repo.calendar();assert.equal(after.tasks.find(t=>t.id==='t-recorded').registered_at,before.tasks.find(t=>t.id==='t-recorded').registered_at);assert.equal(after.tasks.find(t=>t.id==='t-recorded').registration_source,'recorded');assert.equal(db.calendarQueries,0);}finally{db.close();}
+ try{await repo.initialize();db.sql.prepare('UPDATE ledgers SET data=? WHERE owner_id=?').run(JSON.stringify(seed()),'owner-test');const state=await repo.read();const request=submit(state.revision,[{type:'create',id:'t-recorded',values:{title:'服务端登记测试',project_id:'p-inbox'}}]);const receipt=await repo.commit(request);assert.equal(receipt.after.tasks.find(t=>t.id==='t-recorded').created_at,receipt.created_at);const before=await repo.calendar();await repo.commit(submit(receipt.result_version,[update('t-recorded',{next_action:'编辑不会移动登记日'})]));const replay=await repo.commit(request);assert.equal(replay.duplicate,true);const after=await repo.calendar();assert.equal(after.tasks.find(t=>t.id==='t-recorded').registered_at,before.tasks.find(t=>t.id==='t-recorded').registered_at);assert.equal(after.tasks.find(t=>t.id==='t-recorded').registration_source,'recorded');assert.equal(db.calendarQueries,0);}finally{db.close();}
 });
 
 test('首次只在before出现或来自restore/undo时保持未知，不把恢复当登记',async()=>{
@@ -122,7 +122,7 @@ test('restore保留当前已知created_at；旧对象和重新引入对象不信
 
 test('真实repo.undo恢复缺created_at的旧快照仍保留当前服务端登记',async()=>{
  const db=new Adapter(),repo=new Repository(db,'owner-test');
- try{await repo.initialize();const original=await repo.read();const receipt=await repo.commit(submit(original.revision,[update('t-ui',{next_action:'可撤销编辑'})]));const legacyReceipt=structuredClone(receipt);for(const item of [...legacyReceipt.before.tasks,...legacyReceipt.before.projects])delete item.created_at;db.sql.prepare('UPDATE operations SET receipt=? WHERE id=?').run(JSON.stringify(legacyReceipt),receipt.operation_id);const undone=await repo.undo(receipt.operation_id,receipt.result_version,'calendar-undo');assert.equal(undone.state,'verified');assert.equal(undone.after.tasks.find(t=>t.id==='t-ui').created_at,original.data.tasks.find(t=>t.id==='t-ui').created_at);assert.equal(undone.after.projects[0].created_at,original.data.projects[0].created_at);}finally{db.close();}
+ try{await repo.initialize();db.sql.prepare('UPDATE ledgers SET data=? WHERE owner_id=?').run(JSON.stringify(seed()),'owner-test');const original=await repo.read();const receipt=await repo.commit(submit(original.revision,[update('t-ui',{next_action:'可撤销编辑'})]));const legacyReceipt=structuredClone(receipt);for(const item of [...legacyReceipt.before.tasks,...legacyReceipt.before.projects])delete item.created_at;db.sql.prepare("UPDATE operations SET receipt=? WHERE owner_id=? AND json_extract(receipt,'$.operation_id')=?").run(JSON.stringify(legacyReceipt),'owner-test',receipt.operation_id);const undone=await repo.undo(receipt.operation_id,receipt.result_version,'calendar-undo');assert.equal(undone.state,'verified');assert.equal(undone.after.tasks.find(t=>t.id==='t-ui').created_at,original.data.tasks.find(t=>t.id==='t-ui').created_at);assert.equal(undone.after.projects[0].created_at,original.data.projects[0].created_at);}finally{db.close();}
 });
 
 test('无历史正常穷尽为未知；历史故障明确partial且不改原数据',async()=>{
@@ -131,7 +131,7 @@ test('无历史正常穷尽为未知；历史故障明确partial且不改原数�
 
 test('calendar使用同一owner隔离；其他owner历史不能提供登记证明',async()=>{
  const data=legacy(),{db,repo}=fixture(data);db.operation(history(1,empty(data),data,[{type:'initialize'}]),'other-owner');
- try{assert.throws(()=>new Repository(db,''),error=>error.status===401);await assert.rejects(new Repository(db,'other-owner').calendar(),error=>error.status===403);const calendar=await repo.calendar();assert.equal(calendar.tasks[0].registration_source,'unknown');}finally{db.close();}
+ try{assert.throws(()=>new Repository(db,''),error=>error.status===401);assert.deepEqual((await new Repository(db,'other-owner').calendar()).tasks,[]);const calendar=await repo.calendar();assert.equal(calendar.tasks[0].registration_source,'unknown');}finally{db.close();}
 });
 
 test('并发后续操作不越过本次state revision；未初始化日历为空且不初始化',async()=>{

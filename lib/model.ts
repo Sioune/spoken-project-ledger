@@ -240,7 +240,7 @@ export function preview(text:string,data:Ledger,base_version:number,source_event
   else {const project=data.projects.filter(p=>text.includes(p.name));const near=data.tasks.filter(t=>normalize(t.title).length>3&&(normalize(title).includes(normalize(t.title))||normalize(t.title).includes(normalize(title))));
    if(near.length){questions.push('可能是已有任务：'+near.map(t=>t.title).join('、')+'。请在任务详情更新，或改写为明确的新任务。');summary='找到相近记录，尚未新增。'}
    else if(negative){questions.push('这是一条计划还是对已有任务的更新？请明确动作。');summary='未把不确定陈述转为已完成。'}
-   else {changes.push({type:'create',id:uid(),values:{title,project_id:project.length===1?project[0].id:'p-inbox',source_ref:'文本模拟转写 / 用户自述'}});summary='新增本人待办；未编造截止日。'}
+   else {const target=project.length===1?project[0].id:data.projects.find(p=>p.id==='p-inbox')?.id;if(!target){questions.push('请先创建项目，并明确这条待办属于哪个项目。');summary='尚未确定所属项目，不会新建任务。'}else{changes.push({type:'create',id:uid(),values:{title,project_id:target,source_ref:'文本模拟转写 / 用户自述'}});summary='新增本人待办；未编造截止日。'}}
   }
  }
  return {changes,questions,summary,base_version,source_event_id,occurred_at};

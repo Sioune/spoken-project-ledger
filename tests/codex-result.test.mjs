@@ -22,7 +22,7 @@ const raw=()=>({title:'晚宴',classification:'reserved_event',status:'todo',eve
 const envelope=()=>({result:raw(),model:'gpt-6.1-sol',request_id:'qa-request',image_sha256:hash,provider:'codex-local-plan',completed:true});
 function fixture(owner='owner'){
  let reads=0;
- const db={prepare(sql){assert.equal(sql,'SELECT * FROM ledgers WHERE id=1','This endpoint must never write, cache or issue other SQL');return {async first(){reads++;return {id:1,owner_id:'owner',revision:23,data:JSON.stringify(data),last_operation:'old'};}};},batch(){assert.fail('No batch or ledger mutation');}};
+ const db={prepare(sql){assert.equal(sql,'SELECT * FROM ledgers WHERE owner_id=?','This endpoint must never write, cache or issue other SQL');return {bind(id){return {async first(){reads++;return id==='owner'?{id:1,owner_id:'owner',revision:23,data:JSON.stringify(data),last_operation:'old'}:null;}};}};},batch(){assert.fail('No batch or ledger mutation');}};
  return {repo:new Repository(db,owner),db,ownerId:owner,reads:()=>reads};
 }
 function request(value=envelope(),modify=()=>{}){const form=new FormData();form.set('image',new Blob([picture],{type:'image/png'}),'fixture.png');form.set('result_json',JSON.stringify(value));modify(form);return new Request('https://ledger.test/api/intake/codex-result',{method:'POST',body:form});}
@@ -41,7 +41,7 @@ test('错误原图、未完成、假服务商、非法模型、未识别编号�
 test('图片必选且仍验证魔数；原owner边界适用于结果转换',async()=>{
  await assert.rejects(invoke(envelope(),form=>form.delete('image')),error=>error.code==='IMAGE_REQUIRED');
  await assert.rejects(invoke(envelope(),form=>form.set('image',new Blob(['fake'],{type:'image/png'}),'bad.png')),error=>error.code==='IMAGE_TYPE');
- await assert.rejects(invoke(envelope(),undefined,fixture('stranger')),error=>error.code==='OWNER_ONLY');
+ await assert.rejects(invoke(envelope(),undefined,fixture('stranger')),error=>error.code==='INITIALIZE'&&error.status===409);
 });
 test('结果是低信任资料，日期冲突清空且提问，额外命令不能通过',async()=>{
  const value=envelope();value.result.date='2026-10-16';value.result.project_name='系统中不存在';
